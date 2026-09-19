@@ -1,0 +1,38 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    uses: jasmin-abernathy/app-build-factory/.github/workflows/android-build.yml@main
+    with:
+      java_version: "17"
+      android_platform: "36"
+      build_tools: "35.0.0"
+      gradle_tasks: "testDebugUnitTest assembleDebug lintDebug"
+      artifact_path: "app/build/outputs/apk/debug/app-debug.apk"
+      artifact_name: "resilience-vault-debug"
+      retention_days: 3
