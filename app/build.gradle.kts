@@ -33,6 +33,7 @@ android {
             "TELEGRAM_CONFIGURED",
             (telegramApiId.get() != "0" && telegramApiHash.get().isNotBlank()).toString()
         )
+        buildConfigField("boolean", "TELEGRAM_NATIVE_READY", "false")
         buildConfigField("boolean", "PRODUCTION_CRYPTO_READY", "false")
     }
 
