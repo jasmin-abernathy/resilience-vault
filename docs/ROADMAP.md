@@ -8,7 +8,7 @@
 - [x] SAF générique
 - [x] port TDLib
 - [x] orchestration panic testable
-- [x] WorkManager
+- [ ] planifier la synchro périodique quand le pipeline chiffré sera réellement activé
 - [x] CI
 - [ ] SHA final vert
 

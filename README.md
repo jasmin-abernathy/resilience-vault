@@ -21,7 +21,7 @@ Cette base contient :
 - connecteurs Signal et dossier générique ;
 - port Telegram TDLib/JNI ;
 - orchestration testable du panic ;
-- WorkManager pour la future synchro ;
+- une frontière de synchronisation documentée, sans tâche réseau active tant que le coffre n’est pas prêt ;
 - CI via `app-build-factory`.
 
 Le format cryptographique distant, la récupération multi-appareil et le bouton d’urgence réel sont volontairement verrouillés jusqu’à audit. L’app ne prétend donc pas encore fournir une sauvegarde de production ou un effacement d’urgence fiable.

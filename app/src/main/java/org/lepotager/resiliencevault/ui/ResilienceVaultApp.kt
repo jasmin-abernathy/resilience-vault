@@ -80,7 +80,7 @@ fun ResilienceVaultApp(settings: VaultSettings) {
                             onCheckedChange = { enabled ->
                                 scope.launch { settings.setTelegramEnabled(enabled) }
                             },
-                            enabled = BuildConfig.TELEGRAM_CONFIGURED
+                            enabled = BuildConfig.TELEGRAM_CONFIGURED && BuildConfig.TELEGRAM_NATIVE_READY
                         )
                     }
                 }
