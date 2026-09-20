@@ -20,3 +20,5 @@ La règle la plus prudente prévaut.
 11. Toute suppression réelle reçoit des tests d’interruption, répétition et état partiel.
 12. CI : travailler en lots puis valider le SHA final.
 13. Ne pas annoncer sauvegarde/restauration/panic comme sûrs avant les audits listés dans `docs/GPT6-HANDOFF.md`.
+14. Ne jamais ajouter `RECEIVE_SMS` au build par défaut : le remote panic SMS doit rester dans un flavor/canal explicite et être bloqué tant que les issues #2 et #8 ne sont pas validées.
+15. Un SMS entrant ne doit jamais exécuter une longue opération réseau avant la destruction cryptographique locale ; l'architecture du receiver doit être auditée avant implémentation.

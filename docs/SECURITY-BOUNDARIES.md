@@ -15,3 +15,18 @@ La destruction locale doit précéder le réseau. Si DELETE cloud échoue, seul 
 ## Telegram
 
 La session TDLib du coffre est distincte du client Telegram officiel. Le panic ne supprime pas les messages du compte Telegram par défaut. Les Secret Chats présents uniquement dans un autre client ne sont pas récupérés par une nouvelle session.
+
+## Contact de confiance / SMS
+
+Le déclenchement distant est une capacité optionnelle et temporaire, désactivée par défaut.
+
+Le contact autorisé :
+- ne peut ni armer, ni prolonger, ni réarmer le mode ;
+- ne reçoit aucun accès au coffre ;
+- peut uniquement présenter, pendant une fenêtre active, le secret requis pour demander le même panic que le bouton local.
+
+Le secret SMS n'est pas considéré comme confidentiel après transmission : il doit être one-shot, consommé atomiquement et remplacé à chaque nouvel armement.
+
+Le numéro expéditeur ne constitue pas à lui seul une preuve suffisante. L'audit doit considérer l'usurpation/rejeu et la combinaison numéro + secret.
+
+Aucune permission SMS ne doit apparaître dans le build principal tant que le canal de distribution et la politique correspondante ne sont pas validés.
