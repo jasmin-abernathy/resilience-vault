@@ -1,5 +1,17 @@
 # Travaux réservés à GPT-6 / audit renforcé
 
+## Passe du 20 septembre 2026
+
+Revue de conception réalisée sur le bootstrap `6c679bbc6000822d76b590955a9c3f287fcd3081` :
+
+- [Protocole crypto et récupération v1](CRYPTO-PROTOCOL-V1.md).
+- [Machine à états panic et contrat DELETE-only](PANIC-PROTOCOL-V1.md).
+- [Première revue du port TDLib](TDLIB-SECURITY-REVIEW.md).
+- [Relais d'implémentation GPT-5.6](GPT56-HANDOFF-2026-09-20.md).
+- Modèles et tests exécutables : `security_review/`.
+
+Les sujets ci-dessous ont maintenant une décision de conception ; la validation des adaptateurs réels reste nécessaire. Ne pas confondre les tests de modèle avec une activation de production. Les issues #1/#2 restent ouvertes comme portes de validation.
+
 GPT-6 doit être utilisé seulement là où une erreur de conception aurait un impact de sécurité réel.
 
 ## 1. Format cryptographique

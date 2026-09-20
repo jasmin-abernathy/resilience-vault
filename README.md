@@ -42,6 +42,9 @@ Documentation :
 - `docs/TELEGRAM-TDLIB.md`
 - `docs/GPT6-HANDOFF.md`
 - `docs/ROADMAP.md`
+- `docs/CRYPTO-PROTOCOL-V1.md` — format et récupération proposés, non activés
+- `docs/PANIC-PROTOCOL-V1.md` — états durables et capability DELETE-only
+- `docs/GPT56-HANDOFF-2026-09-20.md` — suite après revue GPT-6
 
 ## Telegram
 
