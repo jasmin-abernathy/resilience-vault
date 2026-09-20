@@ -37,3 +37,7 @@ GPT-6 doit auditer avant toute activation :
 - la présence de `RECEIVE_SMS` uniquement dans un flavor/canal explicitement prévu.
 
 GPT-6 ne doit pas consacrer du temps au Compose, à l'écran de réglage ou au wiring Android ordinaire tant que ces invariants ne sont pas tranchés.
+
+## Décision et relais du 20 septembre 2026
+
+La conception du panic SMS est maintenant documentée dans [REMOTE-PANIC-SECURITY-DECISION.md](REMOTE-PANIC-SECURITY-DECISION.md), avec un modèle exécutable et 25 tests adversariaux. Lire le [relais GPT-5.6](RELAIS-GPT56-REMOTE-PANIC-2026-09-20.md) pour l'implémentation suivante. Ce travail ne valide pas la crypto réelle, le stockage Android, les PDU ou le backend : #2 et #8 restent ouvertes et le receiver reste absent.

@@ -20,7 +20,7 @@ Un connecteur ne reçoit jamais directement la clé maître du coffre.
 
 ## Panic
 
-Ordre invariant :
+Ordre du bootstrap actuel (non activable ; à remplacer selon la décision ci-dessous) :
 
 1. verrouillage UI ;
 2. destruction clés locales ;
@@ -31,3 +31,7 @@ Ordre invariant :
 7. désactivation launcher.
 
 Le bouton destructif n’est pas encore relié à cette orchestration.
+
+## Architecture cible après revue GPT-6
+
+Voir [la décision de sécurité](REMOTE-PANIC-SECURITY-DECISION.md) : admission transactionnelle commune au SMS et au bouton local, intention durable LOCAL_PENDING, phase locale critique puis tâches post-destruction indépendantes. Tout accès consulte le gate durable. La désactivation du launcher est reportée hors MVP. Le coordinateur actuel ne constitue pas une implémentation de ce contrat.

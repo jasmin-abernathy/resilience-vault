@@ -258,3 +258,7 @@ Ne pas activer le receiver destructif ni déclarer la fonction sûre tant que :
 - l'expiration est fail-closed ;
 - le merged manifest du flavor concerné est vérifié ;
 - le SHA final a ses tests/lint/build applicables verts.
+
+## Relais traité — 20 septembre 2026
+
+Les propositions ci-dessus sont historiques. Consulter [la décision GPT-6](REMOTE-PANIC-SECURITY-DECISION.md) et [la suite GPT-5.6](RELAIS-GPT56-REMOTE-PANIC-2026-09-20.md). Secret obligatoirement généré, plafond 72 h, désarmement au reboot, transaction consommation + intention, deux phases de panic ; launcher reporté. Modèle de spécification testé ; aucune activation Android.
