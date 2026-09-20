@@ -20,12 +20,17 @@ La session TDLib du coffre est distincte du client Telegram officiel. Le panic n
 
 Le déclenchement distant est une capacité optionnelle et temporaire, désactivée par défaut.
 
-Le contact autorisé :
+L'utilisateur peut autoriser **de 1 à 5 contacts** pendant une même fenêtre d'armement temporaire.
+
+Chaque contact autorisé :
 - ne peut ni armer, ni prolonger, ni réarmer le mode ;
 - ne reçoit aucun accès au coffre ;
-- peut uniquement présenter, pendant une fenêtre active, le secret requis pour demander le même panic que le bouton local.
+- dispose de son **propre secret one-shot** ;
+- peut uniquement présenter, pendant la fenêtre active, son secret pour demander le même panic que le bouton local.
 
-Le secret SMS n'est pas considéré comme confidentiel après transmission : il doit être one-shot, consommé atomiquement et remplacé à chaque nouvel armement.
+Dès qu'un des contacts déclenche valablement le panic, **l'armement entier est consommé** : tous les secrets des autres contacts deviennent immédiatement invalides.
+
+Un secret SMS n'est pas considéré comme confidentiel après transmission : chaque secret doit être one-shot, consommé atomiquement, distinct par contact et remplacé à chaque nouvel armement.
 
 Le numéro expéditeur ne constitue pas à lui seul une preuve suffisante. L'audit doit considérer l'usurpation/rejeu et la combinaison numéro + secret.
 

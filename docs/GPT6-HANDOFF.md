@@ -27,12 +27,12 @@ Première analyse du build officiel Android/JNI, state machine d’authentificat
 Voir `docs/RELAIS-GPT6-REMOTE-PANIC-SMS-2026-09-20.md`, issue #2 et issue #8.
 
 GPT-6 doit auditer avant toute activation :
-- le modèle de confiance du contact et de l'identité de l'expéditeur SMS ;
-- le secret one-shot et sa vérification locale sans stockage en clair ;
+- le modèle de confiance de **1 à 5 contacts** et de l'identité de chaque expéditeur SMS ;
+- un secret one-shot distinct par contact et sa vérification locale sans stockage en clair ;
 - l'expiration stricte avec hard cap proposé de 72 h ;
 - le comportement en cas de reboot, changement d'heure ou horloge non fiable ;
 - les SMS multipart, dupliqués, rejoués ou simultanés ;
-- la consommation atomique du droit distant avant de lancer le panic ;
+- la consommation atomique de **tout l'armement** dès qu'un des 1 à 5 contacts déclenche valablement le panic ;
 - la séparation entre destruction locale immédiate et nettoyage distant/asynchrone ;
 - la présence de `RECEIVE_SMS` uniquement dans un flavor/canal explicitement prévu.
 

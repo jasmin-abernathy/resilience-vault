@@ -58,7 +58,7 @@ Le code actuel contient notamment :
 
 L'utilisateur peut **armer temporairement** le déclenchement distant du panic.
 
-Pendant cette fenêtre seulement, un contact de confiance choisi par l'utilisateur peut envoyer un SMS contenant un secret/mot-clé pour déclencher le **même panic** que le bouton local.
+Pendant cette fenêtre seulement, **un des 1 à 5 contacts de confiance** choisis par l'utilisateur peut envoyer un SMS contenant son secret/mot-clé pour déclencher le **même panic** que le bouton local.
 
 Le contact ne doit jamais pouvoir :
 - armer la fonction ;
@@ -73,18 +73,19 @@ Le contact ne doit jamais pouvoir :
 Mode désactivé par défaut.
 
 L'utilisateur choisit :
-- un contact/numéro autorisé ;
-- une durée : 1 h, 6 h, 12 h, 24 h, 48 h ou 72 h ;
-- un secret généré à forte entropie, éventuellement remplaçable sous règles de robustesse.
+- **de 1 à 5 contacts/numéros autorisés** ;
+- une durée commune : 1 h, 6 h, 12 h, 24 h, 48 h ou 72 h ;
+- un secret distinct généré à forte entropie pour chaque contact, éventuellement remplaçable sous règles de robustesse.
 
 Hard cap proposé : **72 heures**.
 
 L'écran montre explicitement :
-- contact autorisé ;
-- date/heure de fin ;
-- bouton « Désactiver maintenant ».
+- la liste des 1 à 5 contacts autorisés ;
+- la date/heure de fin commune ;
+- un bouton permettant de retirer immédiatement un contact ;
+- un bouton « Désactiver maintenant ».
 
-Chaque nouvel armement invalide l'ancien secret.
+Chaque nouvel armement invalide tous les anciens secrets. Retirer un contact invalide immédiatement son secret. Dès qu'un contact déclenche valablement le panic, **tout l'armement est consommé** et les secrets des autres contacts deviennent invalides.
 
 ---
 
@@ -107,21 +108,22 @@ Un retour arrière de l'horloge ne doit **jamais prolonger** silencieusement la 
 
 Documenter clairement la limite si une garantie stricte de 72 h hors ligne et à travers reboot n'est pas démontrable.
 
-## 2. Secret SMS
+## 2. Secrets SMS par contact
 
 Le secret circule dans un SMS : ne pas le traiter comme un canal confidentiel.
 
 Exigences :
-- secret aléatoire et difficile à deviner ;
+- secret aléatoire et difficile à deviner **distinct pour chacun des 1 à 5 contacts** ;
 - one-shot ;
-- consommé atomiquement avant le panic ;
-- rotation à chaque nouvel armement ;
+- consommation atomique de l'armement avant le panic ;
+- un déclenchement valide invalide tous les secrets de la fenêtre ;
+- rotation de tous les secrets à chaque nouvel armement ;
 - ne pas stocker le secret brut dans l'état persistant ;
 - aucun secret dans les logs, crash reports ou notifications.
 
 Évaluer un vérificateur local adapté plutôt qu'une comparaison avec une valeur en clair.
 
-## 3. Identité du contact
+## 3. Identité des 1 à 5 contacts
 
 Le numéro de l'expéditeur n'est pas à lui seul une authentification forte.
 
@@ -131,7 +133,8 @@ Auditer :
 - spoofing possible ;
 - SMS provenant de passerelles ;
 - double SIM si cela change le comportement ;
-- combinaison obligatoire **expéditeur autorisé + secret**.
+- combinaison obligatoire **expéditeur autorisé + secret propre à ce contact** ;
+- suppression/révocation d'un contact atomique et immédiatement effective.
 
 ## 4. SMS multipart / replay / duplication
 
@@ -143,9 +146,10 @@ Prévoir :
 - déduplication ;
 - protection replay ;
 - concurrence de deux SMS identiques ;
+- concurrence de SMS valides provenant de deux contacts différents ;
 - message reçu pendant qu'un panic est déjà en cours.
 
-Après acceptation du premier message valide, le droit distant doit être définitivement consommé.
+Après acceptation du premier message valide, **la fenêtre entière** doit être définitivement consommée : aucun des autres contacts ne doit pouvoir déclencher à nouveau.
 
 ## 5. BroadcastReceiver et latence du panic
 
@@ -193,7 +197,7 @@ Vérifier la politique Android/Google Play actuelle avant toute intégration sto
 
 # Ce que GPT-6 doit produire
 
-1. Un **threat model court mais concret** du remote panic SMS.
+1. Un **threat model court mais concret** du remote panic SMS avec 1 à 5 contacts.
 2. Une décision documentée sur l'expiration, notamment reboot + modification d'heure.
 3. Une décision sur le secret one-shot et son stockage/vérificateur local.
 4. Une proposition de machine à états atomique.
@@ -219,14 +223,20 @@ Ces tâches peuvent revenir à GPT-5.6 après l'audit.
 # Tests adversariaux minimum
 
 - mode non armé ;
+- zéro contact configuré ;
+- 1 contact configuré ;
+- 5 contacts configurés ;
+- tentative d'un 6e contact refusée ;
 - numéro incorrect ;
 - secret incorrect ;
-- bon numéro + bon secret ;
+- bon numéro + son propre secret ;
+- bon numéro + secret d'un autre contact ;
 - secret rejoué ;
 - SMS multipart ;
 - fragments reçus dans un ordre inhabituel ;
 - SMS dupliqué ;
-- deux SMS simultanés ;
+- deux SMS simultanés du même contact ;
+- deux SMS valides simultanés de deux contacts différents ;
 - expiration une milliseconde avant validation ;
 - changement d'heure vers le futur ;
 - changement d'heure vers le passé ;

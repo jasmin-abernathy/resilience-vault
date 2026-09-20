@@ -22,3 +22,4 @@ La règle la plus prudente prévaut.
 13. Ne pas annoncer sauvegarde/restauration/panic comme sûrs avant les audits listés dans `docs/GPT6-HANDOFF.md`.
 14. Ne jamais ajouter `RECEIVE_SMS` au build par défaut : le remote panic SMS doit rester dans un flavor/canal explicite et être bloqué tant que les issues #2 et #8 ne sont pas validées.
 15. Un SMS entrant ne doit jamais exécuter une longue opération réseau avant la destruction cryptographique locale ; l'architecture du receiver doit être auditée avant implémentation.
+16. Le remote panic SMS accepte **1 à 5 contacts maximum**. Chaque contact a un secret distinct ; un déclenchement valide consomme tout l'armement et invalide immédiatement tous les autres secrets.
