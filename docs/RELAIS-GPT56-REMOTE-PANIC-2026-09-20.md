@@ -11,33 +11,43 @@ Repartir du main actuel ; ne pas réutiliser le SHA de l'ancien relais comme tê
   25 tests adversariaux passés localement. Ce n'est pas du code Android livré à l'utilisateur.
 - Aucun receiver, permission, crypto réelle ou suppression activé ; aucun APK demandé.
 
-## Prochain lot concret
+## Lot 1 repris par GPT-5.6
 
-1. Porter la machine à états et les tests en Kotlin pur, en conservant le bootstrap inactif.
-   Ne pas copier le stockage en RAM du modèle : ce verrou représente une transaction durable.
-2. Implémenter un stockage transactionnel unique : armement + intention panic. Tester
-   crash/commit, corruption et stockage plein ; aucun défaut IDLE à la lecture d'une erreur.
-3. Scinder le coordinateur actuel selon les contrats, avec faux adaptateurs testables.
-   Ajouter le gate aux voies d'accès avant toute implémentation destructive.
-4. Construire les écrans : 1 à 5 contacts, durées prédéfinies, retrait, désactivation,
+Portage du contrat vers le cœur Kotlin, sans activation utilisateur :
+
+- état persistant unique armement + intention panic ;
+- codec versionné avec détection de corruption ;
+- adaptateur Android `AtomicFile` stocké dans `noBackupFilesDir` ;
+- admission locale/SMS synthétique transactionnelle ;
+- secrets générés 256 bits et vérificateurs liés génération/contact ;
+- gate d'accès fail-closed ;
+- coordinateur scindé phase locale / phase post-destruction ;
+- tâches post-destruction indépendantes et checkpointées ;
+- tests JVM du contrat, corruption, commit échoué, concurrence et reprise.
+
+Le store `AtomicFile` n'est volontairement pas encore initialisé ni branché à l'UI :
+une absence de fichier reste fail-closed. L'initialisation doit être reliée explicitement
+au cycle de vie du coffre, pas transformée en défaut IDLE silencieux.
+
+## Prochains lots
+
+1. Construire les écrans : 1 à 5 contacts, durées prédéfinies, retrait, désactivation,
    affichage expiration et avertissement clair du pouvoir donné aux contacts.
-5. Adapter horloge/numéros : boot fiable ou mode indisponible ; normalisation explicite,
-   génération CSPRNG et partage sans persistance du secret brut. Ne pas montrer « actif »
+2. Adapter horloge/numéros : BOOT_COUNT + elapsedRealtime, normalisation explicite,
+   partage des commandes sans persistance du secret brut. Ne pas montrer « actif »
    si receiver ou prérequis sécurité sont absents.
-6. Réserver le flavor/receiver à un lot ultérieur après les portes de la décision. En attendant,
-   tester avec des entrées synthétiques uniquement. Ne pas demander READ_SMS/READ_CONTACTS
-   par commodité ; saisie manuelle suffit au premier écran.
+3. Ajouter le gate aux futures voies de restauration/export/synchronisation réelles.
+4. Réserver le flavor/receiver à un lot ultérieur après les portes de la décision.
+   En attendant, entrées synthétiques uniquement. Ne pas demander READ_SMS/READ_CONTACTS.
 
-Un seul commit cohérent par lot, vérification finale sur ce SHA. Ne pas déclencher des builds
-Android pour de simples docs. Pour les modifications Kotlin : tests/lint/build applicables,
-manifest fusionné ; conserver toutes les protections existantes.
+Un seul commit cohérent par lot, vérification finale sur ce SHA. Pour les modifications
+Kotlin : tests/lint/build applicables et manifest fusionné ; conserver toutes les protections.
 
 ## Ne pas déclarer terminé à tort
 
-La conception ne vaut pas validation de la destruction réelle. #2 et #8 restent ouvertes.
+La conception et le cœur Kotlin ne valident pas la destruction réelle. #2 et #8 restent ouvertes.
 Le format cryptographique, copies de clés, Keystore, backend DELETE-only, PDU multipart et
-durabilité Android restent à valider. Une découverte qui change ces frontières nécessite
+durabilité Android réelle restent à valider. Une découverte qui change ces frontières nécessite
 une nouvelle revue de conception ; ne pas improviser une crypto ni contourner Android.
 
-La désactivation du launcher est reportée hors MVP. L'ancien coordinateur et l'ancien ordre
-dans ARCHITECTURE.md décrivaient le bootstrap ; la décision présente fait autorité pour le refactor.
+La désactivation du launcher reste hors MVP.
