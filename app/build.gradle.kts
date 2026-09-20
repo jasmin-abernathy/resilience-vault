@@ -34,6 +34,7 @@ android {
             (telegramApiId.get() != "0" && telegramApiHash.get().isNotBlank()).toString()
         )
         buildConfigField("boolean", "TELEGRAM_NATIVE_READY", "false")
+        buildConfigField("boolean", "SMS_REMOTE_PANIC_READY", "false")
         buildConfigField("boolean", "PRODUCTION_CRYPTO_READY", "false")
     }
 

@@ -51,3 +51,20 @@ durabilité Android réelle restent à valider. Une découverte qui change ces f
 une nouvelle revue de conception ; ne pas improviser une crypto ni contourner Android.
 
 La désactivation du launcher reste hors MVP.
+
+## Lot 2 repris par GPT-5.6
+
+Préparation UI et adaptateurs Android, toujours sans activation SMS :
+
+- adaptateur d'horloge : `Settings.Global.BOOT_COUNT` + `SystemClock.elapsedRealtime()` + UTC ;
+- le mode devient indisponible si l'identité de boot n'est pas lisible ;
+- normalisation E.164 via `PhoneNumberUtils.formatNumberToE164` avec ISO pays explicitement fourni ;
+- écran de préparation 1 à 5 contacts, sans `READ_CONTACTS` ;
+- durées strictes 1 / 6 / 12 / 24 / 48 / 72 h ;
+- détection visuelle des numéros invalides et doublons ;
+- avertissement explicite du pouvoir destructif délégué ;
+- `SMS_REMOTE_PANIC_READY=false` dans ce build : aucun armement actif, aucune persistance des numéros saisis ;
+- aucun receiver, aucune permission SMS ajoutée.
+
+Le bouton d'armement reste désactivé tant que le canal SMS n'existe pas. Les commandes/secrets
+ne sont donc pas générés depuis cet écran et rien n'est présenté comme « actif ».
