@@ -154,7 +154,7 @@ class PanicAdmissionService(
                 AdmissionResult.Rejected(AdmissionRejectionReason.NOT_ARMED)
             )
 
-            if (!envelope.smsPermissionObserved || !windowIsValid(arm, envelope.clock)) {
+            if (!envelope.smsPermissionObserved || !RemotePanicWindow.isValid(arm, envelope.clock)) {
                 return@transaction PanicStateMutation.Replace(
                     state.copy(arm = null),
                     AdmissionResult.Rejected(AdmissionRejectionReason.EXPIRED_OR_INVALIDATED)
@@ -272,37 +272,4 @@ class PanicAdmissionService(
         return null
     }
 
-    private fun windowIsValid(
-        arm: ArmedRemotePanic,
-        now: PanicClockSnapshot
-    ): Boolean {
-        if (now.bootId == null || now.bootId != arm.bootId) return false
-        if (now.elapsedRealtimeMs < 0 || now.utcMs < 0) return false
-
-        val elapsedDelta = try {
-            Math.subtractExact(now.elapsedRealtimeMs, arm.startedElapsedRealtimeMs)
-        } catch (_: ArithmeticException) {
-            return false
-        }
-        if (elapsedDelta < 0 || elapsedDelta >= arm.durationMs) return false
-
-        val utcDeadline = try {
-            Math.addExact(arm.startedUtcMs, arm.durationMs)
-        } catch (_: ArithmeticException) {
-            return false
-        }
-        if (now.utcMs >= utcDeadline) return false
-
-        val utcDelta = try {
-            Math.subtractExact(now.utcMs, arm.startedUtcMs)
-        } catch (_: ArithmeticException) {
-            return false
-        }
-        val drift = try {
-            Math.subtractExact(utcDelta, elapsedDelta)
-        } catch (_: ArithmeticException) {
-            return false
-        }
-        return drift in -RemotePanicPolicy.DRIFT_TOLERANCE_MS..RemotePanicPolicy.DRIFT_TOLERANCE_MS
-    }
 }

@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,13 +29,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.launch
 import org.lepotager.resiliencevault.BuildConfig
 import org.lepotager.resiliencevault.panic.AndroidPanicClock
+import org.lepotager.resiliencevault.panic.AtomicFilePanicStateStore
+import org.lepotager.resiliencevault.panic.PanicAdmissionService
+import org.lepotager.resiliencevault.panic.PanicPhase
+import org.lepotager.resiliencevault.panic.PanicStoreReadResult
+import org.lepotager.resiliencevault.panic.PanicTransactionResult
 import org.lepotager.resiliencevault.panic.PhoneNumberInvalidReason
 import org.lepotager.resiliencevault.panic.PhoneNumberNormalization
 import org.lepotager.resiliencevault.panic.PlatformPhoneNumberNormalizer
 import org.lepotager.resiliencevault.panic.RemotePanicPolicy
+import org.lepotager.resiliencevault.panic.RemotePanicWindow
 import org.lepotager.resiliencevault.settings.VaultSettings
 import org.lepotager.resiliencevault.storage.PersistedTreeAccess
 
@@ -117,13 +126,28 @@ fun ResilienceVaultApp(settings: VaultSettings) {
 @Composable
 private fun RemotePanicPreparationCard() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val normalizer = remember { PlatformPhoneNumberNormalizer() }
     val panicClock = remember(context) { AndroidPanicClock(context.contentResolver) }
-    val bootIdentityAvailable = remember(context) { panicClock.snapshot().bootId != null }
+    val store = remember(context) { AtomicFilePanicStateStore.create(context.applicationContext) }
+    val admission = remember(store) { PanicAdmissionService(store) }
 
+    var persistentState by remember { mutableStateOf<PanicStoreReadResult?>(null) }
+    var actionMessage by remember { mutableStateOf<String?>(null) }
     var countryIso by remember { mutableStateOf("") }
     var contactInputs by remember { mutableStateOf(listOf("")) }
     var selectedDurationMs by remember { mutableStateOf(24L * 60L * 60L * 1_000L) }
+
+    fun refreshState() {
+        scope.launch { persistentState = store.read() }
+    }
+
+    LaunchedEffect(store) {
+        persistentState = store.read()
+    }
+
+    val clockSnapshot = panicClock.snapshot()
+    val bootIdentityAvailable = clockSnapshot.bootId != null
 
     val normalized = contactInputs.map { raw -> normalizer.normalize(raw, countryIso) }
     val successfulNumbers = normalized.mapNotNull {
@@ -148,6 +172,36 @@ private fun RemotePanicPreparationCard() {
                 "De 1 à 5 contacts pourront, lorsque cette fonction sera activée, " +
                     "déclencher la destruction d’urgence pendant la fenêtre choisie."
             )
+
+            PersistentRemotePanicStatus(
+                readResult = persistentState,
+                panicClock = panicClock,
+                onRemoveContact = { number ->
+                    scope.launch {
+                        val result = admission.removeTrustedContact(number)
+                        actionMessage = when (result) {
+                            is PanicTransactionResult.Success ->
+                                if (result.value) "Contact retiré de l’armement." else "Aucun changement."
+                            is PanicTransactionResult.Unavailable ->
+                                "État de sécurité indisponible : ${result.failure}."
+                        }
+                        persistentState = store.read()
+                    }
+                },
+                onDisarm = {
+                    scope.launch {
+                        val result = admission.disarmRemote()
+                        actionMessage = when (result) {
+                            is PanicTransactionResult.Success ->
+                                if (result.value) "Armement distant désactivé." else "Aucun armement actif."
+                            is PanicTransactionResult.Unavailable ->
+                                "État de sécurité indisponible : ${result.failure}."
+                        }
+                        persistentState = store.read()
+                    }
+                }
+            )
+
             Text(
                 if (BuildConfig.SMS_REMOTE_PANIC_READY)
                     "Canal SMS disponible."
@@ -250,6 +304,74 @@ private fun RemotePanicPreparationCard() {
                     else
                         "Armement SMS indisponible"
                 )
+            }
+
+            actionMessage?.let { Text(it) }
+
+            OutlinedButton(onClick = ::refreshState) {
+                Text("Actualiser l’état")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PersistentRemotePanicStatus(
+    readResult: PanicStoreReadResult?,
+    panicClock: AndroidPanicClock,
+    onRemoveContact: (String) -> Unit,
+    onDisarm: () -> Unit
+) {
+    when (readResult) {
+        null -> Text("Vérification du registre de sécurité…")
+        is PanicStoreReadResult.Unavailable -> Text(
+            if (readResult.failure.name == "MISSING")
+                "Registre de sécurité non initialisé : mode distant bloqué par défaut."
+            else
+                "Registre de sécurité indisponible (${readResult.failure}) : mode distant bloqué."
+        )
+        is PanicStoreReadResult.Ready -> {
+            val state = readResult.state
+            if (state.phase != PanicPhase.IDLE) {
+                Text("Panic déjà engagé (${state.phase}) : accès au coffre bloqué.")
+                return
+            }
+
+            val arm = state.arm
+            if (arm == null) {
+                Text("Aucun armement distant actif.")
+                return
+            }
+
+            val currentClock = panicClock.snapshot()
+            val valid = RemotePanicWindow.isValid(arm, currentClock)
+            val expiry = RemotePanicWindow.expiresUtcMs(arm)
+            if (!valid || expiry == null) {
+                Text("Armement expiré ou invalidé : il ne doit pas être considéré comme actif.")
+            } else {
+                val formatted = DateFormat.getDateTimeInstance().format(Date(expiry))
+                Text(
+                    if (BuildConfig.SMS_REMOTE_PANIC_READY)
+                        "Armement enregistré jusqu’au ${formatted}."
+                    else
+                        "Armement enregistré mais inexécutable dans ce build ; expiration ${formatted}."
+                )
+            }
+
+            arm.contacts.forEach { contact ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(contact.e164)
+                    OutlinedButton(onClick = { onRemoveContact(contact.e164) }) {
+                        Text("Retirer")
+                    }
+                }
+            }
+
+            OutlinedButton(onClick = onDisarm) {
+                Text("Désactiver l’armement")
             }
         }
     }

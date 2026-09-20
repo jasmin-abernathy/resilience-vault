@@ -68,3 +68,13 @@ Préparation UI et adaptateurs Android, toujours sans activation SMS :
 
 Le bouton d'armement reste désactivé tant que le canal SMS n'existe pas. Les commandes/secrets
 ne sont donc pas générés depuis cet écran et rien n'est présenté comme « actif ».
+
+## Complément lot 2
+
+- lecture du registre `AtomicFile` depuis l’écran sans initialisation implicite ;
+- affichage de l’expiration d’un armement réellement persisté ;
+- armement expiré/reboot/horloge incohérente affiché comme invalide, jamais comme actif ;
+- retrait individuel et désactivation d’un armement existant ;
+- logique temporelle factorisée dans `RemotePanicWindow` et partagée avec l’admission SMS synthétique.
+
+Le build reste sans receiver ni permission SMS ; le bouton d’armement ne peut toujours pas produire de secret.
