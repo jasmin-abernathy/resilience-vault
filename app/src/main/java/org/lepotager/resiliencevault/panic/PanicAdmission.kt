@@ -277,10 +277,32 @@ class PanicAdmissionService(
         now: PanicClockSnapshot
     ): Boolean {
         if (now.bootId == null || now.bootId != arm.bootId) return false
-        val elapsedDelta = now.elapsedRealtimeMs - arm.startedElapsedRealtimeMs
+        if (now.elapsedRealtimeMs < 0 || now.utcMs < 0) return false
+
+        val elapsedDelta = try {
+            Math.subtractExact(now.elapsedRealtimeMs, arm.startedElapsedRealtimeMs)
+        } catch (_: ArithmeticException) {
+            return false
+        }
         if (elapsedDelta < 0 || elapsedDelta >= arm.durationMs) return false
-        if (now.utcMs >= arm.startedUtcMs + arm.durationMs) return false
-        val utcDelta = now.utcMs - arm.startedUtcMs
-        return kotlin.math.abs(utcDelta - elapsedDelta) <= RemotePanicPolicy.DRIFT_TOLERANCE_MS
+
+        val utcDeadline = try {
+            Math.addExact(arm.startedUtcMs, arm.durationMs)
+        } catch (_: ArithmeticException) {
+            return false
+        }
+        if (now.utcMs >= utcDeadline) return false
+
+        val utcDelta = try {
+            Math.subtractExact(now.utcMs, arm.startedUtcMs)
+        } catch (_: ArithmeticException) {
+            return false
+        }
+        val drift = try {
+            Math.subtractExact(utcDelta, elapsedDelta)
+        } catch (_: ArithmeticException) {
+            return false
+        }
+        return drift in -RemotePanicPolicy.DRIFT_TOLERANCE_MS..RemotePanicPolicy.DRIFT_TOLERANCE_MS
     }
 }

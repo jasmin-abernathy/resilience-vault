@@ -36,12 +36,19 @@ class AtomicFilePanicStateStore private constructor(
 
     override suspend fun initializeEmptyIfMissing(): PanicStoreReadResult = withContext(ioDispatcher) {
         mutex.withLock {
-            if (file.baseFile.exists()) {
-                return@withLock readUnlocked()
-            }
-            when (writeUnlocked(PanicPersistentState.initial())) {
-                null -> PanicStoreReadResult.Ready(PanicPersistentState.initial())
-                else -> PanicStoreReadResult.Unavailable(PanicStoreFailure.COMMIT_FAILED)
+            when (val current = readUnlocked()) {
+                is PanicStoreReadResult.Ready -> current
+                is PanicStoreReadResult.Unavailable -> {
+                    if (current.failure != PanicStoreFailure.MISSING) {
+                        current
+                    } else {
+                        val initial = PanicPersistentState.initial()
+                        when (writeUnlocked(initial)) {
+                            null -> PanicStoreReadResult.Ready(initial)
+                            else -> PanicStoreReadResult.Unavailable(PanicStoreFailure.COMMIT_FAILED)
+                        }
+                    }
+                }
             }
         }
     }
@@ -86,20 +93,17 @@ class AtomicFilePanicStateStore private constructor(
         }
     }
 
-    private fun readUnlocked(): PanicStoreReadResult {
-        if (!file.baseFile.exists()) {
-            return PanicStoreReadResult.Unavailable(PanicStoreFailure.MISSING)
-        }
-
-        return try {
+    private fun readUnlocked(): PanicStoreReadResult =
+        try {
             val bytes = file.openRead().use { it.readBytes() }
             PanicStoreReadResult.Ready(PanicStateCodec.decode(bytes))
+        } catch (_: FileNotFoundException) {
+            PanicStoreReadResult.Unavailable(PanicStoreFailure.MISSING)
         } catch (_: PanicStateCorruptionException) {
             PanicStoreReadResult.Unavailable(PanicStoreFailure.CORRUPT)
         } catch (_: Throwable) {
             PanicStoreReadResult.Unavailable(PanicStoreFailure.IO_ERROR)
         }
-    }
 
     private fun writeUnlocked(state: PanicPersistentState): PanicStoreFailure? {
         file.baseFile.parentFile?.let { parent ->

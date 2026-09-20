@@ -191,7 +191,6 @@ class PanicRecoveryCoordinator(
             }
         }) {
             is PanicTransactionResult.Unavailable -> null
-            is PanicTransactionResult.Success ->
-                if (checkpoint.value) checkpoint.state else expected
+            is PanicTransactionResult.Success -> checkpoint.state
         }
 }
