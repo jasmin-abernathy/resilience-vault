@@ -171,3 +171,9 @@ Il documente les erreurs déjà rencontrées et leurs remèdes :
 - permissions Android ajoutées prématurément ;
 - BuildConfig référencé avant génération ;
 - reprise depuis un SHA périmé après changement de HEAD.
+
+
+## Relais traité
+
+Voir [la revue GPT-6](GPT6-IMPLEMENTATION-REVIEW-2026-09-21.md) et
+[la suite GPT-5.6](RELAIS-GPT56-APRES-REVUE-2026-09-21.md). Ce document est désormais historique.

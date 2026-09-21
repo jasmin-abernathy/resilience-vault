@@ -10,6 +10,7 @@ internal object PanicStateCodec {
     private const val MAGIC = 0x52565053
     private const val VERSION = 1
     private const val MAX_PAYLOAD_BYTES = 32 * 1024
+    const val MAX_FILE_BYTES = MAX_PAYLOAD_BYTES + 20
 
     fun encode(state: PanicPersistentState): ByteArray {
         state.validate()
@@ -56,6 +57,7 @@ internal object PanicStateCodec {
 
     fun decode(bytes: ByteArray): PanicPersistentState {
         try {
+            require(bytes.size <= MAX_FILE_BYTES)
             DataInputStream(ByteArrayInputStream(bytes)).use { input ->
                 require(input.readInt() == MAGIC)
                 require(input.readInt() == VERSION)
@@ -118,7 +120,7 @@ internal object PanicStateCodec {
                 state.validate()
                 return state
             }
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             throw PanicStateCorruptionException(error)
         }
     }

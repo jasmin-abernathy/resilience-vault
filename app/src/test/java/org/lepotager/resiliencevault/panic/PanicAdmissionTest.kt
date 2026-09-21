@@ -12,6 +12,7 @@ import org.junit.Test
 
 class PanicAdmissionTest {
     private val now = PanicClockSnapshot("boot-1", 100_000L, 1_000_000L)
+    private var observation = PanicAdmissionObservation(now, true)
     private val contacts = (0 until 6).map { "+3360000000$it" }
 
     @Test
@@ -74,6 +75,7 @@ class PanicAdmissionTest {
     @Test
     fun exact_expiry_boot_and_clock_drift_fail_closed() = runTest {
         suspend fun attempt(clock: PanicClockSnapshot): AdmissionResult {
+            observation = PanicAdmissionObservation(now, true)
             val store = InMemoryPanicStateStore()
             val service = service(store)
             val armed = service.armRemote(request(listOf(contacts[0]))) as RemoteArmResult.Armed
@@ -122,8 +124,9 @@ class PanicAdmissionTest {
             (untrusted as AdmissionResult.Rejected).reason
         )
 
+        observation = observation.copy(smsChannelReady = false)
         val revoked = service.acceptSms(
-            envelope(contacts[0], armed.commands.single().command).copy(smsPermissionObserved = false)
+            ValidatedSmsEnvelope(contacts[0], armed.commands.single().command, true, true)
         )
         assertEquals(
             AdmissionRejectionReason.EXPIRED_OR_INVALIDATED,
@@ -205,6 +208,7 @@ class PanicAdmissionTest {
     ): PanicAdmissionService =
         PanicAdmissionService(
             store = store,
+            environment = PanicAdmissionEnvironment { observation },
             tokenGenerator = RemotePanicTokenGenerator(SecureRandom())
         )
 
@@ -213,21 +217,15 @@ class PanicAdmissionTest {
         durationMs: Long = 3_600_000L
     ) = RemoteArmRequest(
         canonicalContactsE164 = numbers,
-        durationMs = durationMs,
-        clock = now,
-        remoteChannelReady = true
+        durationMs = durationMs
     )
 
     private fun envelope(
         sender: String,
         body: String,
         clock: PanicClockSnapshot = now
-    ) = ValidatedSmsEnvelope(
-        senderE164 = sender,
-        body = body,
-        clock = clock,
-        smsPermissionObserved = true,
-        trustedSystemDelivery = true,
-        completeMessage = true
-    )
+    ): ValidatedSmsEnvelope {
+        observation = PanicAdmissionObservation(clock, true)
+        return ValidatedSmsEnvelope(sender, body, true, true)
+    }
 }

@@ -20,18 +20,20 @@ Un connecteur ne reçoit jamais directement la clé maître du coffre.
 
 ## Panic
 
-Ordre du bootstrap actuel (non activable ; à remplacer selon la décision ci-dessous) :
+L'admission locale/SMS synthétique consomme l'armement et écrit LOCAL_PENDING dans le même
+registre. Le coordinateur reprend la phase locale critique puis les tâches post-destruction.
+Le store vérifie ses commits, refuse les transitions arrière et ne recrée pas un registre manquant.
+PanicAccessGate existe, mais le futur gestionnaire de leases est encore nécessaire avant tout
+accès réel aux clés. Bouton destructif, receiver SMS et effets réels restent absents/inactifs.
+Désactivation du launcher reportée hors MVP.
 
-1. verrouillage UI ;
-2. destruction clés locales ;
-3. purge staging ;
-4. révocation sessions connecteurs ;
-5. demande de suppression distante ;
-6. retry delete-only si hors ligne ;
-7. désactivation launcher.
+## Décisions actuelles
 
-Le bouton destructif n’est pas encore relié à cette orchestration.
+- [Revue Kotlin du 21 septembre](GPT6-IMPLEMENTATION-REVIEW-2026-09-21.md).
+- [Format crypto et cycle des clés](CRYPTO-FORMAT-AND-KEY-LIFECYCLE.md).
+- [Contrat serveur DELETE-only](DELETE-ONLY-SERVER-CONTRACT.md).
+- [Relais GPT-5.6](RELAIS-GPT56-APRES-REVUE-2026-09-21.md).
 
-## Architecture cible après revue GPT-6
-
-Voir [la décision de sécurité](REMOTE-PANIC-SECURITY-DECISION.md) : admission transactionnelle commune au SMS et au bouton local, intention durable LOCAL_PENDING, phase locale critique puis tâches post-destruction indépendantes. Tout accès consulte le gate durable. La désactivation du launcher est reportée hors MVP. Le coordinateur actuel ne constitue pas une implémentation de ce contrat.
+La décision SMS du 20 septembre demeure la base ; les documents ci-dessus précisent les
+correctifs et les limites restant à valider. Une interface ou un test fake ne prouve pas
+la destruction de clés ni la durabilité sur Android.

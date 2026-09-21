@@ -2,15 +2,15 @@ package org.lepotager.resiliencevault.panic
 
 data class RemoteArmRequest(
     val canonicalContactsE164: List<String>,
-    val durationMs: Long,
-    val clock: PanicClockSnapshot,
-    val remoteChannelReady: Boolean
+    val durationMs: Long
 )
 
 data class TrustedContactCommand(
     val e164: String,
     val command: String
-)
+) {
+    override fun toString(): String = "TrustedContactCommand([redacted])"
+}
 
 sealed interface RemoteArmResult {
     data class Armed(
@@ -27,17 +27,18 @@ enum class ArmRejectionReason {
     REMOTE_CHANNEL_UNAVAILABLE,
     INVALID_CLOCK,
     INVALID_DURATION,
-    INVALID_CONTACTS
+    INVALID_CONTACTS,
+    ENTROPY_FAILURE
 }
 
 data class ValidatedSmsEnvelope(
     val senderE164: String,
     val body: String,
-    val clock: PanicClockSnapshot,
-    val smsPermissionObserved: Boolean,
     val trustedSystemDelivery: Boolean,
     val completeMessage: Boolean
-)
+) {
+    override fun toString(): String = "ValidatedSmsEnvelope([redacted])"
+}
 
 sealed interface AdmissionResult {
     data class Accepted(val panicIdHex: String) : AdmissionResult
@@ -57,58 +58,90 @@ enum class AdmissionRejectionReason {
 
 class PanicAdmissionService(
     private val store: PanicStateStore,
+    private val environment: PanicAdmissionEnvironment = PanicAdmissionEnvironment {
+        PanicAdmissionObservation(PanicClockSnapshot(null, -1, -1), false)
+    },
     private val tokenGenerator: RemotePanicTokenGenerator = RemotePanicTokenGenerator()
 ) {
     suspend fun armRemote(request: RemoteArmRequest): RemoteArmResult {
-        val staticFailure = validateArmRequest(request)
-        if (staticFailure != null) {
-            return clearExistingArmAndReject(staticFailure)
-        }
-
-        val generation = tokenGenerator.newHex256()
-        val secrets = request.canonicalContactsE164.associateWith { tokenGenerator.newHex256() }
-        val contacts = request.canonicalContactsE164.map { number ->
-            TrustedContactVerifier(
-                e164 = number,
-                verifierHex = RemotePanicCommand.verifierHex(
-                    generationHex = generation,
-                    e164 = number,
-                    secretHex = secrets.getValue(number)
-                )
-            )
-        }
-        val armed = ArmedRemotePanic(
-            generationHex = generation,
-            bootId = request.clock.bootId!!,
-            startedElapsedRealtimeMs = request.clock.elapsedRealtimeMs,
-            startedUtcMs = request.clock.utcMs,
-            durationMs = request.durationMs,
-            contacts = contacts
-        )
-        val commands = request.canonicalContactsE164.map { number ->
-            TrustedContactCommand(
-                e164 = number,
-                command = RemotePanicCommand.build(generation, secrets.getValue(number))
-            )
-        }
-
         return when (val result = store.transaction { state ->
             if (state.phase != PanicPhase.IDLE) {
-                PanicStateMutation.Keep(RemoteArmResult.Rejected(ArmRejectionReason.PANIC_ACTIVE))
-            } else {
-                PanicStateMutation.Replace(
-                    state = state.copy(arm = armed),
-                    value = RemoteArmResult.Armed(
-                        commands = commands,
-                        expiresUtcMs = request.clock.utcMs + request.durationMs
-                    )
+                return@transaction PanicStateMutation.Keep(
+                    RemoteArmResult.Rejected(ArmRejectionReason.PANIC_ACTIVE)
                 )
             }
+            // Observe after obtaining the store lock, never trust a caller's timestamp.
+            val observation = observeOrUnavailable()
+            val failure = validateArmRequest(request, observation)
+            if (failure != null) {
+                return@transaction PanicStateMutation.Replace(
+                    state.copy(arm = null), RemoteArmResult.Rejected(failure)
+                )
+            }
+            val generation: String
+            val secrets: Map<String, String>
+            try {
+                generation = tokenGenerator.newHex256()
+                secrets = request.canonicalContactsE164.associateWith { tokenGenerator.newHex256() }
+                check(secrets.values.toSet().size == secrets.size)
+                check(generation !in secrets.values)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return@transaction PanicStateMutation.Replace(
+                    state.copy(arm = null), RemoteArmResult.Rejected(ArmRejectionReason.ENTROPY_FAILURE)
+                )
+            }
+            // RNG/provider work may have delayed us; validate a fresh observation again.
+            val finalObservation = observeOrUnavailable()
+            val finalFailure = validateArmRequest(request, finalObservation)
+            if (finalFailure != null || finalObservation.clock.bootId != observation.clock.bootId) {
+                return@transaction PanicStateMutation.Replace(
+                    state.copy(arm = null),
+                    RemoteArmResult.Rejected(finalFailure ?: ArmRejectionReason.INVALID_CLOCK)
+                )
+            }
+            val clock = finalObservation.clock
+            val contacts = secrets.map { (number, secret) ->
+                TrustedContactVerifier(number, RemotePanicCommand.verifierHex(generation, number, secret))
+            }
+            val armed = ArmedRemotePanic(
+                generation, clock.bootId!!, clock.elapsedRealtimeMs, clock.utcMs,
+                request.durationMs, contacts
+            )
+            PanicStateMutation.Replace(
+                state.copy(arm = armed),
+                RemoteArmResult.Armed(
+                    secrets.map { (number, secret) ->
+                        TrustedContactCommand(number, RemotePanicCommand.build(generation, secret))
+                    },
+                    Math.addExact(clock.utcMs, request.durationMs)
+                )
+            )
         }) {
             is PanicTransactionResult.Success -> result.value
             is PanicTransactionResult.Unavailable -> RemoteArmResult.StorageUnavailable(result.failure)
         }
     }
+
+    /** Persist invalidation when UI/startup observes it; a later clock rollback cannot revive it. */
+    suspend fun refreshRemoteState(): PanicStoreReadResult =
+        when (val result = store.transaction { state ->
+            val arm = state.arm
+            if (arm == null || state.phase != PanicPhase.IDLE) {
+                PanicStateMutation.Keep(Unit)
+            } else {
+                val observation = observeOrUnavailable()
+                if (!observation.smsChannelReady || !RemotePanicWindow.isValid(arm, observation.clock)) {
+                    PanicStateMutation.Replace(state.copy(arm = null), Unit)
+                } else {
+                    PanicStateMutation.Keep(Unit)
+                }
+            }
+        }) {
+            is PanicTransactionResult.Success -> PanicStoreReadResult.Ready(result.state)
+            is PanicTransactionResult.Unavailable -> PanicStoreReadResult.Unavailable(result.failure)
+        }
 
     suspend fun disarmRemote(): PanicTransactionResult<Boolean> =
         store.transaction { state ->
@@ -154,7 +187,8 @@ class PanicAdmissionService(
                 AdmissionResult.Rejected(AdmissionRejectionReason.NOT_ARMED)
             )
 
-            if (!envelope.smsPermissionObserved || !RemotePanicWindow.isValid(arm, envelope.clock)) {
+            val observation = observeOrUnavailable()
+            if (!observation.smsChannelReady || !RemotePanicWindow.isValid(arm, observation.clock)) {
                 return@transaction PanicStateMutation.Replace(
                     state.copy(arm = null),
                     AdmissionResult.Rejected(AdmissionRejectionReason.EXPIRED_OR_INVALIDATED)
@@ -186,6 +220,14 @@ class PanicAdmissionService(
             ) {
                 return@transaction PanicStateMutation.Keep(
                     AdmissionResult.Rejected(AdmissionRejectionReason.INVALID_SECRET)
+                )
+            }
+
+            val finalObservation = observeOrUnavailable()
+            if (!finalObservation.smsChannelReady || !RemotePanicWindow.isValid(arm, finalObservation.clock)) {
+                return@transaction PanicStateMutation.Replace(
+                    state.copy(arm = null),
+                    AdmissionResult.Rejected(AdmissionRejectionReason.EXPIRED_OR_INVALIDATED)
                 )
             }
 
@@ -232,35 +274,33 @@ class PanicAdmissionService(
         }
     }
 
-    private suspend fun clearExistingArmAndReject(
-        reason: ArmRejectionReason
-    ): RemoteArmResult =
-        when (val result = store.transaction { state ->
-            if (state.phase != PanicPhase.IDLE) {
-                PanicStateMutation.Keep(RemoteArmResult.Rejected(ArmRejectionReason.PANIC_ACTIVE))
-            } else if (state.arm == null) {
-                PanicStateMutation.Keep(RemoteArmResult.Rejected(reason))
-            } else {
-                PanicStateMutation.Replace(
-                    state.copy(arm = null),
-                    RemoteArmResult.Rejected(reason)
-                )
-            }
-        }) {
-            is PanicTransactionResult.Success -> result.value
-            is PanicTransactionResult.Unavailable -> RemoteArmResult.StorageUnavailable(result.failure)
+    private fun observeOrUnavailable(): PanicAdmissionObservation =
+        try {
+            environment.observe()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            PanicAdmissionObservation(PanicClockSnapshot(null, -1, -1), false)
         }
 
-    private fun validateArmRequest(request: RemoteArmRequest): ArmRejectionReason? {
-        if (!request.remoteChannelReady) return ArmRejectionReason.REMOTE_CHANNEL_UNAVAILABLE
-        if (request.clock.bootId.isNullOrBlank() ||
-            request.clock.elapsedRealtimeMs < 0 ||
-            request.clock.utcMs < 0
+    private fun validateArmRequest(
+        request: RemoteArmRequest, observation: PanicAdmissionObservation
+    ): ArmRejectionReason? {
+        if (!observation.smsChannelReady) return ArmRejectionReason.REMOTE_CHANNEL_UNAVAILABLE
+        if (observation.clock.bootId.isNullOrBlank() ||
+            observation.clock.elapsedRealtimeMs < 0 ||
+            observation.clock.utcMs < 0
         ) {
             return ArmRejectionReason.INVALID_CLOCK
         }
         if (request.durationMs !in RemotePanicPolicy.allowedDurationsMs) {
             return ArmRejectionReason.INVALID_DURATION
+        }
+        try {
+            Math.addExact(observation.clock.utcMs, request.durationMs)
+            Math.addExact(observation.clock.elapsedRealtimeMs, request.durationMs)
+        } catch (_: ArithmeticException) {
+            return ArmRejectionReason.INVALID_CLOCK
         }
         val contacts = request.canonicalContactsE164
         if (contacts.size !in 1..RemotePanicPolicy.MAX_CONTACTS ||

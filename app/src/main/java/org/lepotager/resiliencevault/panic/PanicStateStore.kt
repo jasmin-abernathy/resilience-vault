@@ -35,8 +35,6 @@ sealed interface PanicTransactionResult<out T> {
 interface PanicStateStore {
     suspend fun read(): PanicStoreReadResult
 
-    suspend fun initializeEmptyIfMissing(): PanicStoreReadResult
-
     suspend fun <T> transaction(
         transform: (PanicPersistentState) -> PanicStateMutation<T>
     ): PanicTransactionResult<T>

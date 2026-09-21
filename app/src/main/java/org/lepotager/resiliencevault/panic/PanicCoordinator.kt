@@ -1,5 +1,8 @@
 package org.lepotager.resiliencevault.panic
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
+
 enum class PanicEffectResult {
     COMPLETED,
     RETRYABLE_FAILURE,
@@ -61,8 +64,8 @@ class PanicRecoveryCoordinator(
             PanicPhase.LOCAL_PENDING -> Unit
         }
 
-        val access = localEffects.invalidateInFlightAccess()
-        val keys = localEffects.destroyLocalReadCapability()
+        val access = attemptEffect(2_000L) { localEffects.invalidateInFlightAccess() }
+        val keys = attemptEffect(2_000L) { localEffects.destroyLocalReadCapability() }
         if (access != PanicEffectResult.COMPLETED || keys != PanicEffectResult.COMPLETED) {
             return LocalRecoveryResult.StillPending(access, keys)
         }
@@ -112,7 +115,7 @@ class PanicRecoveryCoordinator(
         var remoteResult: PanicEffectResult? = null
 
         if (!state.purgeComplete) {
-            purgeResult = postEffects.purgePrivateStaging()
+            purgeResult = attemptEffect(10_000L) { postEffects.purgePrivateStaging() }
             if (purgeResult == PanicEffectResult.COMPLETED) {
                 state = checkpointPostTask(state, PostTask.PURGE)
                     ?: return PostRecoveryResult.StorageUnavailable(PanicStoreFailure.COMMIT_FAILED)
@@ -120,7 +123,7 @@ class PanicRecoveryCoordinator(
         }
 
         if (!state.sessionRevocationComplete) {
-            revokeResult = postEffects.revokeDedicatedSessions()
+            revokeResult = attemptEffect(10_000L) { postEffects.revokeDedicatedSessions() }
             if (revokeResult == PanicEffectResult.COMPLETED) {
                 state = checkpointPostTask(state, PostTask.REVOKE)
                     ?: return PostRecoveryResult.StorageUnavailable(PanicStoreFailure.COMMIT_FAILED)
@@ -128,7 +131,7 @@ class PanicRecoveryCoordinator(
         }
 
         if (!state.remoteDeleteComplete) {
-            remoteResult = postEffects.deleteRemoteVault()
+            remoteResult = attemptEffect(10_000L) { postEffects.deleteRemoteVault() }
             if (remoteResult == PanicEffectResult.COMPLETED) {
                 state = checkpointPostTask(state, PostTask.REMOTE_DELETE)
                     ?: return PostRecoveryResult.StorageUnavailable(PanicStoreFailure.COMMIT_FAILED)
@@ -165,6 +168,21 @@ class PanicRecoveryCoordinator(
             )
         )
     }
+
+    // Cooperative timeouts do not interrupt blocking platform I/O; adapters must be bounded too.
+    private suspend fun attemptEffect(
+        timeoutMs: Long,
+        action: suspend () -> PanicEffectResult
+    ): PanicEffectResult =
+        withTimeoutOrNull(timeoutMs) {
+            try {
+                action()
+            } catch (cancelled: CancellationException) {
+                throw cancelled // Preserve caller cancellation; never call the next effect after it.
+            } catch (_: Exception) {
+                PanicEffectResult.RETRYABLE_FAILURE
+            }
+        } ?: PanicEffectResult.RETRYABLE_FAILURE
 
     private enum class PostTask {
         PURGE,

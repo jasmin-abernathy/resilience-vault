@@ -139,11 +139,11 @@ private fun RemotePanicPreparationCard() {
     var selectedDurationMs by remember { mutableStateOf(24L * 60L * 60L * 1_000L) }
 
     fun refreshState() {
-        scope.launch { persistentState = store.read() }
+        scope.launch { persistentState = admission.refreshRemoteState() }
     }
 
     LaunchedEffect(store) {
-        persistentState = store.read()
+        persistentState = admission.refreshRemoteState()
     }
 
     val clockSnapshot = panicClock.snapshot()
@@ -185,7 +185,7 @@ private fun RemotePanicPreparationCard() {
                             is PanicTransactionResult.Unavailable ->
                                 "État de sécurité indisponible : ${result.failure}."
                         }
-                        persistentState = store.read()
+                        persistentState = admission.refreshRemoteState()
                     }
                 },
                 onDisarm = {
@@ -197,7 +197,7 @@ private fun RemotePanicPreparationCard() {
                             is PanicTransactionResult.Unavailable ->
                                 "État de sécurité indisponible : ${result.failure}."
                         }
-                        persistentState = store.read()
+                        persistentState = admission.refreshRemoteState()
                     }
                 }
             )

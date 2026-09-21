@@ -53,3 +53,16 @@
 - [ ] privacy policy
 - [ ] build reproductible
 - [ ] canal de distribution
+
+
+## Revue du 21 septembre — distinction conception / activation
+- [x] revue de conformité Kotlin et correctifs de frontières de sécurité
+- [x] spécification crypto V1 et cycle de clés (#1), sans implémentation AEAD active
+- [x] contrat serveur DELETE-only et modèle de concurrence (#2), sans backend actif
+- [x] 32 tests Python de spécification
+- [ ] leases d'accès + provisioning explicite du coffre
+- [ ] crash tests Android/Keystore réels et intégration Tink
+- [ ] tests d'autorisation du backend et purge réelle
+
+Voir le relais GPT-5.6 du 21 septembre pour le lot suivant. Les cases de conception ne
+remplacent pas les portes d'activation des sections B/C/E.

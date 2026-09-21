@@ -11,7 +11,9 @@ object RemotePanicCommand {
     data class Parsed(
         val generationHex: String,
         val secretHex: String
-    )
+    ) {
+        override fun toString(): String = "Parsed([redacted])"
+    }
 
     fun isCanonicalE164(value: String): Boolean = e164.matches(value)
 
@@ -25,8 +27,8 @@ object RemotePanicCommand {
     }
 
     fun parseExact(body: String): Parsed? {
-        if (!body.all { it.code in 0..127 }) return null
         if (body.length != 133) return null
+        if (!body.all { it.code in 0..127 }) return null
         val parts = body.split(' ')
         if (parts.size != 3 || parts[0] != "RV1") return null
         if (!isLowerHex256(parts[1]) || !isLowerHex256(parts[2])) return null

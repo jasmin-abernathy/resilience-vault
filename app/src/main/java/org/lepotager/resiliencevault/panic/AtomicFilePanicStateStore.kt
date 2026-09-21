@@ -1,136 +1,78 @@
 package org.lepotager.resiliencevault.panic
 
 import android.content.Context
+import android.system.Os
+import android.system.OsConstants
 import android.util.AtomicFile
+import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileNotFoundException
 import java.io.FileOutputStream
-import kotlinx.coroutines.CancellationException
+import java.io.IOException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
+/** Single-process store: every caller for one path shares the same mutex/failure latch.
+ * No first-launch initialization here: a missing security record must never reopen a vault.
+ * Device kill/power-loss tests are still required before activating destructive effects.
+ */
 class AtomicFilePanicStateStore private constructor(
-    private val file: AtomicFile,
-    private val ioDispatcher: CoroutineDispatcher
-) : PanicStateStore {
-    private val mutex = Mutex()
-
+    delegate: PanicStateStore
+) : PanicStateStore by delegate {
     companion object {
+        private val instances = mutableMapOf<String, AtomicFilePanicStateStore>()
+
+        @Synchronized
         fun create(
             context: Context,
             ioDispatcher: CoroutineDispatcher = Dispatchers.IO
         ): AtomicFilePanicStateStore {
-            val directory = File(context.noBackupFilesDir, "security")
-            return AtomicFilePanicStateStore(
-                file = AtomicFile(File(directory, "remote-panic-state.bin")),
-                ioDispatcher = ioDispatcher
-            )
-        }
-    }
-
-    override suspend fun read(): PanicStoreReadResult = withContext(ioDispatcher) {
-        mutex.withLock { readUnlocked() }
-    }
-
-    override suspend fun initializeEmptyIfMissing(): PanicStoreReadResult = withContext(ioDispatcher) {
-        mutex.withLock {
-            when (val current = readUnlocked()) {
-                is PanicStoreReadResult.Ready -> current
-                is PanicStoreReadResult.Unavailable -> {
-                    if (current.failure != PanicStoreFailure.MISSING) {
-                        current
-                    } else {
-                        val initial = PanicPersistentState.initial()
-                        when (writeUnlocked(initial)) {
-                            null -> PanicStoreReadResult.Ready(initial)
-                            else -> PanicStoreReadResult.Unavailable(PanicStoreFailure.COMMIT_FAILED)
-                        }
-                    }
-                }
+            val path = File(context.noBackupFilesDir, "security/remote-panic-state.bin").canonicalFile
+            return instances.getOrPut(path.path) {
+                AtomicFilePanicStateStore(VerifiedPanicStateStore(AndroidStateFile(path), ioDispatcher))
             }
         }
     }
+}
 
-    override suspend fun <T> transaction(
-        transform: (PanicPersistentState) -> PanicStateMutation<T>
-    ): PanicTransactionResult<T> = withContext(ioDispatcher) {
-        mutex.withLock {
-            val current = when (val read = readUnlocked()) {
-                is PanicStoreReadResult.Ready -> read.state
-                is PanicStoreReadResult.Unavailable ->
-                    return@withLock PanicTransactionResult.Unavailable(read.failure)
+private class AndroidStateFile(private val path: File) : PanicStateFile {
+    private val file = AtomicFile(path)
+
+    override fun read(): ByteArray = file.openRead().use { input ->
+        // Bounded before allocation, even for a corrupt/oversized file.
+        val bytes = ByteArrayOutputStream()
+        val buffer = ByteArray(4096)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            if (bytes.size() + count > PanicStateCodec.MAX_FILE_BYTES) {
+                throw IOException("State exceeds size limit")
             }
-
-            when (val mutation = transform(current)) {
-                is PanicStateMutation.Keep ->
-                    PanicTransactionResult.Success(
-                        value = mutation.value,
-                        state = current,
-                        wroteState = false
-                    )
-
-                is PanicStateMutation.Replace -> {
-                    try {
-                        mutation.state.validate()
-                    } catch (_: Throwable) {
-                        return@withLock PanicTransactionResult.Unavailable(PanicStoreFailure.CORRUPT)
-                    }
-
-                    val failure = writeUnlocked(mutation.state)
-                    if (failure != null) {
-                        PanicTransactionResult.Unavailable(failure)
-                    } else {
-                        PanicTransactionResult.Success(
-                            value = mutation.value,
-                            state = mutation.state,
-                            wroteState = true
-                        )
-                    }
-                }
-            }
+            bytes.write(buffer, 0, count)
         }
+        bytes.toByteArray()
     }
 
-    private fun readUnlocked(): PanicStoreReadResult =
-        try {
-            val bytes = file.openRead().use { it.readBytes() }
-            PanicStoreReadResult.Ready(PanicStateCodec.decode(bytes))
-        } catch (_: FileNotFoundException) {
-            PanicStoreReadResult.Unavailable(PanicStoreFailure.MISSING)
-        } catch (_: PanicStateCorruptionException) {
-            PanicStoreReadResult.Unavailable(PanicStoreFailure.CORRUPT)
-        } catch (_: Throwable) {
-            PanicStoreReadResult.Unavailable(PanicStoreFailure.IO_ERROR)
-        }
-
-    private fun writeUnlocked(state: PanicPersistentState): PanicStoreFailure? {
-        file.baseFile.parentFile?.let { parent ->
-            if (!parent.exists() && !parent.mkdirs()) {
-                return PanicStoreFailure.COMMIT_FAILED
-            }
-        }
-
-        val bytes = try {
-            PanicStateCodec.encode(state)
-        } catch (_: Throwable) {
-            return PanicStoreFailure.CORRUPT
-        }
-
+    override fun write(bytes: ByteArray) {
         var output: FileOutputStream? = null
-        return try {
+        try {
             output = file.startWrite()
             output.write(bytes)
+            // Explicitly propagate sync errors; AtomicFile finish has no result value.
+            output.fd.sync()
             file.finishWrite(output)
-            null
-        } catch (cancelled: CancellationException) {
-            output?.let(file::failWrite)
-            throw cancelled
-        } catch (_: Throwable) {
-            output?.let(file::failWrite)
-            PanicStoreFailure.COMMIT_FAILED
+            output = null
+            val directory = Os.open(path.parent!!, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
+            try {
+                Os.fsync(directory)
+            } finally {
+                Os.close(directory)
+            }
+            // VerifiedPanicStateStore subsequently compares the committed bytes.
+        } catch (error: Exception) {
+            output?.let {
+                try { file.failWrite(it) } catch (_: Exception) { /* original error wins */ }
+            }
+            throw error
         }
     }
 }

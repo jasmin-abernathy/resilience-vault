@@ -18,12 +18,6 @@ internal class InMemoryPanicStateStore(
             ?: PanicStoreReadResult.Unavailable(PanicStoreFailure.MISSING)
     }
 
-    override suspend fun initializeEmptyIfMissing(): PanicStoreReadResult = mutex.withLock {
-        unavailableFailure?.let { return@withLock PanicStoreReadResult.Unavailable(it) }
-        if (state == null) state = PanicPersistentState.initial()
-        PanicStoreReadResult.Ready(state!!)
-    }
-
     override suspend fun <T> transaction(
         transform: (PanicPersistentState) -> PanicStateMutation<T>
     ): PanicTransactionResult<T> = mutex.withLock {
@@ -42,7 +36,7 @@ internal class InMemoryPanicStateStore(
                     failNextCommit = false
                     return@withLock PanicTransactionResult.Unavailable(PanicStoreFailure.COMMIT_FAILED)
                 }
-                mutation.state.validate()
+                mutation.state.validateTransitionFrom(current)
                 state = mutation.state
                 PanicTransactionResult.Success(mutation.value, mutation.state, true)
             }

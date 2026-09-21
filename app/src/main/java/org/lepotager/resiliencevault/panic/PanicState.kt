@@ -24,7 +24,9 @@ data class PanicClockSnapshot(
 data class TrustedContactVerifier(
     val e164: String,
     val verifierHex: String
-)
+) {
+    override fun toString(): String = "TrustedContactVerifier([redacted])"
+}
 
 data class ArmedRemotePanic(
     val generationHex: String,
@@ -33,7 +35,9 @@ data class ArmedRemotePanic(
     val startedUtcMs: Long,
     val durationMs: Long,
     val contacts: List<TrustedContactVerifier>
-)
+) {
+    override fun toString(): String = "ArmedRemotePanic([redacted])"
+}
 
 data class PanicPersistentState(
     val phase: PanicPhase = PanicPhase.IDLE,
@@ -46,6 +50,26 @@ data class PanicPersistentState(
     companion object {
         fun initial(): PanicPersistentState = PanicPersistentState()
     }
+
+    /** A valid standalone record must also be a legal successor of the stored record. */
+    fun validateTransitionFrom(previous: PanicPersistentState) {
+        validate()
+        previous.validate()
+        when (previous.phase) {
+            PanicPhase.IDLE -> require(phase == PanicPhase.IDLE || phase == PanicPhase.LOCAL_PENDING)
+            PanicPhase.LOCAL_PENDING -> require(phase == PanicPhase.LOCAL_PENDING || phase == PanicPhase.POST_PENDING)
+            PanicPhase.POST_PENDING -> require(phase == PanicPhase.POST_PENDING || phase == PanicPhase.COMPLETE)
+            PanicPhase.COMPLETE -> require(this == previous)
+        }
+        if (previous.phase != PanicPhase.IDLE) {
+            require(panicIdHex == previous.panicIdHex)
+            require(!previous.purgeComplete || purgeComplete)
+            require(!previous.sessionRevocationComplete || sessionRevocationComplete)
+            require(!previous.remoteDeleteComplete || remoteDeleteComplete)
+        }
+    }
+
+    override fun toString(): String = "PanicPersistentState(phase=$phase, [redacted])"
 
     fun validate() {
         when (phase) {
@@ -75,6 +99,8 @@ data class PanicPersistentState(
             require(armed.startedElapsedRealtimeMs >= 0)
             require(armed.startedUtcMs >= 0)
             require(armed.durationMs in RemotePanicPolicy.allowedDurationsMs)
+            require(armed.startedUtcMs <= Long.MAX_VALUE - armed.durationMs)
+            require(armed.startedElapsedRealtimeMs <= Long.MAX_VALUE - armed.durationMs)
             require(armed.contacts.size in 1..RemotePanicPolicy.MAX_CONTACTS)
             require(armed.contacts.map { it.e164 }.distinct().size == armed.contacts.size)
             require(armed.contacts.all { RemotePanicCommand.isCanonicalE164(it.e164) })
