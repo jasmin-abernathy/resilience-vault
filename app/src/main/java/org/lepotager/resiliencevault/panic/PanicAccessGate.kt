@@ -10,6 +10,12 @@ sealed interface VaultAccessDecision {
     data class Blocked(val reason: VaultAccessBlockReason) : VaultAccessDecision
 }
 
+/**
+ * Snapshot/status gate only.
+ *
+ * Security-sensitive read/export/sync/restore operations must use VaultAccessLeaseManager
+ * so acquisition is accounted for and the panic path can drain in-flight handles.
+ */
 class PanicAccessGate(
     private val store: PanicStateStore
 ) {

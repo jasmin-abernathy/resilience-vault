@@ -6,7 +6,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 enum class PanicEffectResult {
     COMPLETED,
     RETRYABLE_FAILURE,
-    PERMANENT_FAILURE
+    PERMANENT_FAILURE,
+    NOT_ATTEMPTED
 }
 
 interface LocalCriticalPanicEffects {
@@ -65,8 +66,15 @@ class PanicRecoveryCoordinator(
         }
 
         val access = attemptEffect(2_000L) { localEffects.invalidateInFlightAccess() }
+        if (access != PanicEffectResult.COMPLETED) {
+            return LocalRecoveryResult.StillPending(
+                accessInvalidation = access,
+                keyDestruction = PanicEffectResult.NOT_ATTEMPTED
+            )
+        }
+
         val keys = attemptEffect(2_000L) { localEffects.destroyLocalReadCapability() }
-        if (access != PanicEffectResult.COMPLETED || keys != PanicEffectResult.COMPLETED) {
+        if (keys != PanicEffectResult.COMPLETED) {
             return LocalRecoveryResult.StillPending(access, keys)
         }
 

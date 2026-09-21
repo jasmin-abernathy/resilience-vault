@@ -61,3 +61,18 @@ l'intégration impose un changement de format/garantie. Ne pas réinventer de ch
 Le premier run du lot `9934f5bd6c34f4b0e2772239174e779ff008bbb8` a échoué : O_DIRECTORY
 n'est pas une constante du SDK Android public. Le correctif utilise O_RDONLY puis
 S_ISDIR(fstat(fd).st_mode) avant fsync. Ne pas utiliser le run initial comme validation.
+
+## Lot leases d'accès — GPT-5.6
+
+Implémenté après la revue GPT-6, sans crypto ni receiver :
+- `VaultAccessLeaseManager` process-local unique par instance de `PanicStateStore` ;
+- `withLease` pour les futures voies READ/EXPORT/SYNC/RESTORE ;
+- fermeture irréversible des nouvelles acquisitions pendant le panic ;
+- drain des leases en cours avant destruction de la capacité de lecture ;
+- cancellation/exception d'une opération libère toujours son lease ;
+- le coordinateur ne tente plus la destruction des clés si le drain d'accès échoue ou expire ;
+- tests de concurrence, fermeture, store manquant/panic et cancellation.
+
+Le provisioning réel n'est PAS implémenté ici : il doit être lié au futur inventaire de clés/aliases
+et à la génération du coffre définis par `CRYPTO-FORMAT-AND-KEY-LIFECYCLE.md`.
+Revue GPT-6 requise avant de considérer les leases comme une garantie de production.

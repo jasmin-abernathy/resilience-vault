@@ -27,6 +27,23 @@ class PanicRecoveryCoordinatorTest {
     }
 
     @Test
+    fun failed_access_drain_never_attempts_key_destruction() = runTest {
+        val store = pendingStore()
+        val local = RecordingLocalEffects(
+            invalidate = PanicEffectResult.RETRYABLE_FAILURE,
+            keys = PanicEffectResult.COMPLETED
+        )
+        val coordinator = PanicRecoveryCoordinator(store, local, RecordingPostEffects())
+
+        val result = coordinator.resumeLocalCritical() as LocalRecoveryResult.StillPending
+
+        assertEquals(PanicEffectResult.RETRYABLE_FAILURE, result.accessInvalidation)
+        assertEquals(PanicEffectResult.NOT_ATTEMPTED, result.keyDestruction)
+        assertEquals(0, local.keyCalls)
+        assertEquals(PanicPhase.LOCAL_PENDING, ready(store).phase)
+    }
+
+    @Test
     fun successful_local_phase_checkpoints_before_any_post_effect() = runTest {
         val store = pendingStore()
         val local = RecordingLocalEffects()
