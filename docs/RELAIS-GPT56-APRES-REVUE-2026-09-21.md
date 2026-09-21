@@ -2,8 +2,8 @@
 
 Dépôt `jasmin-abernathy/resilience-vault`, branche `main`.
 Base auditée : `e130b96efe4db7444a83c7c14892db663bd40d12`.
-**SHA de reprise : celui du commit qui ajoute le présent relais**, disponible dans l'historique
-Git du fichier et les commentaires des issues #1/#2/#8. Re-fetch main et les checks avant travail.
+**SHA de reprise : le main incluant le correctif SDK décrit ci-dessous**, consigné dans
+les commentaires des issues #1/#2/#8 avec le run CI final. Re-fetch main et les checks avant travail.
 Ne pas repartir du SHA de base : il ne contient pas les correctifs de cette revue.
 
 Lire repo-factory/AGENTS, playbook compatibilité, registre d'erreurs Resilience Vault et
@@ -55,3 +55,9 @@ appareil/serveur restent des portes obligatoires. TDLib/JNI (#3) n'a pas été m
 
 Revenir à GPT-6 pour revue du cycle de clés et des leases effectivement implémentés, ou si
 l'intégration impose un changement de format/garantie. Ne pas réinventer de chiffrement.
+
+## Correctif SDK pendant validation
+
+Le premier run du lot `9934f5bd6c34f4b0e2772239174e779ff008bbb8` a échoué : O_DIRECTORY
+n'est pas une constante du SDK Android public. Le correctif utilise O_RDONLY puis
+S_ISDIR(fstat(fd).st_mode) avant fsync. Ne pas utiliser le run initial comme validation.

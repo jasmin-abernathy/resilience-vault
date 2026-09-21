@@ -61,8 +61,11 @@ private class AndroidStateFile(private val path: File) : PanicStateFile {
             output.fd.sync()
             file.finishWrite(output)
             output = null
-            val directory = Os.open(path.parent!!, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
+            val directory = Os.open(path.parent!!, OsConstants.O_RDONLY, 0)
             try {
+                if (!OsConstants.S_ISDIR(Os.fstat(directory).st_mode)) {
+                    throw IOException("State parent is not a directory")
+                }
                 Os.fsync(directory)
             } finally {
                 Os.close(directory)
