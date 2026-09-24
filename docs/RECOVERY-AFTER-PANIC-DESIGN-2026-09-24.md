@@ -21,7 +21,7 @@ La copie originale dans un dossier SAF ou dans Signal/Telegram officiel n'est pa
 
 ## Préparation avant activation du panic distant
 
-L'UI doit distinguer « suppression du cloud actif » et « effacement de toutes les copies ». Avant d'affirmer qu'un coffre restera récupérable, vérifier et enregistrer localement : kit R exporté et relu, archive(s) complètement écrite(s), restauration d'essai réussie sur le **head exact** à supprimer, et périmètre de suppression excluant ces archives. Si une copie a changé depuis l'essai ou si le head a avancé, la preuve expire ; une nouvelle sauvegarde et un nouvel essai sont requis.
+L'UI doit distinguer « suppression du cloud actif » et « effacement de toutes les copies ». Avant d'affirmer qu'un coffre restera récupérable, vérifier et enregistrer localement : kit R exporté et relu, archive(s) complètement écrite(s), restauration d'essai réussie sur le **head exact** à supprimer, et périmètre de suppression excluant ces archives. Les identités authentifiées `(vaultId, génération, head)` du kit, de l'archive complète, de l'essai et du coffre actif doivent toutes correspondre ; des valeurs déclarées par l'interface ou le nom du fichier ne constituent pas des preuves. Si une copie a changé depuis l'essai ou si le head a avancé, la preuve expire ; une nouvelle sauvegarde et un nouvel essai sont requis.
 
 Ne **pas** ajouter une condition de réseau ou de présence d'archive à la destruction locale urgente : elle doit pouvoir s'exécuter hors ligne. Si l'utilisateur n'a jamais préparé de récupération, afficher dès l'armement et au retour dans l'app que la suppression distante peut être irréversible. Une vérification de readiness ne doit pas permettre à un SMS distant d'élargir ses droits ni d'annuler un panic déjà admis.
 
