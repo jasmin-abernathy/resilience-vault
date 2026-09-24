@@ -16,61 +16,34 @@ sealed interface VaultJournalRead {
     data object Unavailable : VaultJournalRead
 }
 
+internal interface VaultProvisioningJournalFile {
+    fun read(): ByteArray
+    fun write(bytes: ByteArray)
+}
+
 /**
- * Per-vault-generation, no-backup journal. A process crash during a write is recovered by AtomicFile.
- * Caller must hold the vault's provisioning lock and verify Keystore/inventory evidence before
- * calling create; no key may be created before BEGIN has been committed.
+ * Filesystem-independent verifier for the provisioning journal.
  *
- * This store deliberately has no reset or implicit recovery method.
+ * Missing is returned only for a genuinely absent file. Corruption, uncertain writes and
+ * verification failures permanently latch this store instance closed. Explicit create() is the
+ * only path from Missing to BEGIN; there is deliberately no reset/repair API.
  */
-class AtomicVaultProvisioningJournalStore private constructor(private val path: File) {
-    companion object {
-        private val instances = mutableMapOf<String, AtomicVaultProvisioningJournalStore>()
-
-        @Synchronized
-        fun forVault(
-            context: Context,
-            identity: VaultProvisioningJournal
-        ): AtomicVaultProvisioningJournalStore {
-            // VaultProvisioningJournal validates both identifiers before they enter a path.
-            val name = "${identity.vaultIdHex}.${identity.generationHex}.bin"
-            val path = File(context.noBackupFilesDir, "security/provisioning/$name").canonicalFile
-            return instances.getOrPut(path.path) { AtomicVaultProvisioningJournalStore(path) }
-        }
-    }
-
-    private val file = AtomicFile(path)
+internal class VerifiedVaultProvisioningJournalStore(
+    private val file: VaultProvisioningJournalFile
+) {
     private var failed = false
 
     @Synchronized
     fun read(): VaultJournalRead {
         if (failed) return VaultJournalRead.Unavailable
         return try {
-            val bytes = file.openRead().use { input ->
-                val bounded = ByteArrayOutputStream(VaultProvisioningJournalCodec.FILE_BYTES)
-                val buffer = ByteArray(128)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    if (bounded.size() + count > VaultProvisioningJournalCodec.FILE_BYTES) {
-                        throw IOException("Provisioning journal too large")
-                    }
-                    bounded.write(buffer, 0, count)
-                }
-                if (bounded.size() != VaultProvisioningJournalCodec.FILE_BYTES) {
-                    throw IOException("Invalid provisioning journal length")
-                }
-                bounded.toByteArray()
+            val bytes = file.read()
+            if (bytes.size != VaultProvisioningJournalCodec.FILE_BYTES) {
+                throw IOException("Invalid provisioning journal length")
             }
             VaultJournalRead.Ready(VaultProvisioningJournalCodec.decode(bytes))
         } catch (_: FileNotFoundException) {
-            if (path.exists() || File(path.path + ".new").exists() ||
-                File(path.path + ".bak").exists()) {
-                failed = true
-                VaultJournalRead.Unavailable
-            } else {
-                VaultJournalRead.Missing
-            }
+            VaultJournalRead.Missing
         } catch (_: Exception) {
             failed = true
             VaultJournalRead.Unavailable
@@ -95,27 +68,105 @@ class AtomicVaultProvisioningJournalStore private constructor(private val path: 
 
     private fun commit(record: VaultProvisioningJournal) {
         check(!failed)
+        try {
+            file.write(VaultProvisioningJournalCodec.encode(record))
+            check(read() == VaultJournalRead.Ready(record)) {
+                "Provisioning journal verification failed"
+            }
+        } catch (error: Exception) {
+            failed = true
+            throw error
+        }
+    }
+}
+
+/**
+ * Per-vault-generation, no-backup Android journal.
+ *
+ * The public API is unchanged; the verifier is split out so crash/write-failure semantics can be
+ * tested without pretending JVM tests prove Android AtomicFile durability.
+ */
+class AtomicVaultProvisioningJournalStore private constructor(
+    private val delegate: VerifiedVaultProvisioningJournalStore
+) {
+    companion object {
+        private val instances = mutableMapOf<String, AtomicVaultProvisioningJournalStore>()
+
+        @Synchronized
+        fun forVault(
+            context: Context,
+            identity: VaultProvisioningJournal
+        ): AtomicVaultProvisioningJournalStore {
+            val name = "${identity.vaultIdHex}.${identity.generationHex}.bin"
+            val path = File(context.noBackupFilesDir, "security/provisioning/$name").canonicalFile
+            return instances.getOrPut(path.path) {
+                AtomicVaultProvisioningJournalStore(
+                    VerifiedVaultProvisioningJournalStore(
+                        AndroidVaultProvisioningJournalFile(path)
+                    )
+                )
+            }
+        }
+    }
+
+    fun read(): VaultJournalRead = delegate.read()
+
+    fun create(record: VaultProvisioningJournal) = delegate.create(record)
+
+    fun advance(expected: VaultProvisioningJournal, next: VaultProvisioningJournal) =
+        delegate.advance(expected, next)
+}
+
+private class AndroidVaultProvisioningJournalFile(
+    private val path: File
+) : VaultProvisioningJournalFile {
+    private val file = AtomicFile(path)
+
+    override fun read(): ByteArray = try {
+        file.openRead().use { input ->
+            val bounded = ByteArrayOutputStream(VaultProvisioningJournalCodec.FILE_BYTES)
+            val buffer = ByteArray(128)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (bounded.size() + count > VaultProvisioningJournalCodec.FILE_BYTES) {
+                    throw IOException("Provisioning journal too large")
+                }
+                bounded.write(buffer, 0, count)
+            }
+            bounded.toByteArray()
+        }
+    } catch (missing: FileNotFoundException) {
+        if (path.exists() || File(path.path + ".new").exists() ||
+            File(path.path + ".bak").exists()) {
+            throw IOException("Provisioning journal has unresolved AtomicFile state", missing)
+        }
+        throw missing
+    }
+
+    override fun write(bytes: ByteArray) {
+        require(bytes.size == VaultProvisioningJournalCodec.FILE_BYTES)
         var stream: FileOutputStream? = null
         try {
             path.parentFile!!.mkdirs()
             stream = file.startWrite()
-            stream.write(VaultProvisioningJournalCodec.encode(record))
+            stream.write(bytes)
             stream.fd.sync()
             file.finishWrite(stream)
             stream = null
             val directory = Os.open(path.parent!!, OsConstants.O_RDONLY, 0)
             try {
-                check(OsConstants.S_ISDIR(Os.fstat(directory).st_mode))
+                if (!OsConstants.S_ISDIR(Os.fstat(directory).st_mode)) {
+                    throw IOException("Provisioning journal parent is not a directory")
+                }
                 Os.fsync(directory)
             } finally {
                 Os.close(directory)
             }
-            check(read() == VaultJournalRead.Ready(record)) { "Provisioning journal verification failed" }
         } catch (error: Exception) {
             stream?.let {
-                try { file.failWrite(it) } catch (_: Exception) { /* preserve original error */ }
+                try { file.failWrite(it) } catch (_: Exception) { /* original error wins */ }
             }
-            failed = true
             throw error
         }
     }
