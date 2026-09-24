@@ -85,6 +85,10 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
 
+    // Pinned now so the chosen primitive is compiled/tested before any production crypto is enabled.
+    // PRODUCTION_CRYPTO_READY must remain false until the audited Android Keystore/key-lifecycle lot.
+    implementation("com.google.crypto.tink:tink-android:1.23.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
