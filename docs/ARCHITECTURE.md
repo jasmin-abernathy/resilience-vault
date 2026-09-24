@@ -45,7 +45,6 @@ Désactivation du launcher reportée hors MVP.
 - [Format crypto et cycle des clés](CRYPTO-FORMAT-AND-KEY-LIFECYCLE.md).
 - [Contrat serveur DELETE-only](DELETE-ONLY-SERVER-CONTRACT.md).
 - [Relais GPT-5.6](RELAIS-GPT56-APRES-REVUE-2026-09-21.md).
-- [Relais GPT-6 crypto du 24 septembre](RELAIS-GPT6-CRYPTO-2026-09-24.md).
 
 La décision SMS du 20 septembre demeure la base ; les documents ci-dessus précisent les
 correctifs et les limites restant à valider. Une interface, un test JVM ou un modèle Python ne
