@@ -26,8 +26,14 @@ class AndroidVaultKek(private val context: Context) {
         keyStore().containsAlias(aliasFor(record))
 
     @Synchronized
-    fun createExplicitly(record: VaultProvisioningJournal): SecretKey {
+    fun createExplicitly(
+        journal: AtomicVaultProvisioningJournalStore,
+        record: VaultProvisioningJournal
+    ): SecretKey {
         require(record.phase == VaultProvisioningPolicy.JournalPhase.BEGIN)
+        check(journal.read() == VaultJournalRead.Ready(record)) {
+            "BEGIN must be committed before generating a KEK"
+        }
         val manager = context.getSystemService(KeyguardManager::class.java)
             ?: throw IllegalStateException("Secure lock screen unavailable")
         check(manager.isDeviceSecure) { "A secure device lock is required" }
@@ -58,10 +64,19 @@ class AndroidVaultKek(private val context: Context) {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         generator.init(spec)
         generator.generateKey()
-        return loadExisting(record)
+        return lookupExisting(record)
     }
 
-    fun loadExisting(record: VaultProvisioningJournal): SecretKey =
+    fun loadExisting(
+        journal: AtomicVaultProvisioningJournalStore,
+        record: VaultProvisioningJournal
+    ): SecretKey {
+        check(record.phase != VaultProvisioningPolicy.JournalPhase.BEGIN)
+        check(journal.read() == VaultJournalRead.Ready(record)) { "Provisioning journal unavailable" }
+        return lookupExisting(record)
+    }
+
+    private fun lookupExisting(record: VaultProvisioningJournal): SecretKey =
         (keyStore().getKey(aliasFor(record), null) as? SecretKey)
             ?: throw IllegalStateException("KEK unavailable; do not regenerate")
 

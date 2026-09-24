@@ -17,7 +17,7 @@ sealed interface VaultJournalRead {
 }
 
 /**
- * Per-installation, no-backup journal. A process crash during a write is recovered by AtomicFile.
+ * Per-vault-generation, no-backup journal. A process crash during a write is recovered by AtomicFile.
  * Caller must hold the vault's provisioning lock and verify Keystore/inventory evidence before
  * calling create; no key may be created before BEGIN has been committed.
  *
@@ -28,8 +28,13 @@ class AtomicVaultProvisioningJournalStore private constructor(private val path: 
         private val instances = mutableMapOf<String, AtomicVaultProvisioningJournalStore>()
 
         @Synchronized
-        fun forContext(context: Context): AtomicVaultProvisioningJournalStore {
-            val path = File(context.noBackupFilesDir, "security/vault-provisioning.bin").canonicalFile
+        fun forVault(
+            context: Context,
+            identity: VaultProvisioningJournal
+        ): AtomicVaultProvisioningJournalStore {
+            // VaultProvisioningJournal validates both identifiers before they enter a path.
+            val name = "${identity.vaultIdHex}.${identity.generationHex}.bin"
+            val path = File(context.noBackupFilesDir, "security/provisioning/$name").canonicalFile
             return instances.getOrPut(path.path) { AtomicVaultProvisioningJournalStore(path) }
         }
     }
