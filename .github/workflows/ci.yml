@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "app/**"
+      - "tools/**"
       - "gradle/**"
       - "gradlew"
       - "gradlew.bat"
@@ -14,6 +15,7 @@ on:
   pull_request:
     paths:
       - "app/**"
+      - "tools/**"
       - "gradle/**"
       - "gradlew"
       - "gradlew.bat"
@@ -26,7 +28,17 @@ permissions:
   contents: read
 
 jobs:
+  security-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify bootstrap security invariants
+        run: python3 tools/check_security_invariants.py
+      - name: Run executable security models
+        run: python3 -m unittest discover -s tools/security_model -p 'test_*.py'
+
   android:
+    needs: security-contracts
     uses: jasmin-abernathy/app-build-factory/.github/workflows/android-build.yml@main
     with:
       java_version: "17"
