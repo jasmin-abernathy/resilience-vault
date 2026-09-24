@@ -39,12 +39,58 @@ jobs:
 
   android:
     needs: security-contracts
-    uses: jasmin-abernathy/app-build-factory/.github/workflows/android-build.yml@main
-    with:
-      java_version: "17"
-      android_platform: "36"
-      build_tools: "35.0.0"
-      gradle_tasks: "testDebugUnitTest assembleDebug lintDebug"
-      artifact_path: "app/build/outputs/apk/debug/app-debug.apk"
-      artifact_name: "resilience-vault-debug"
-      retention_days: 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: android-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle cache and validate wrapper
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Ensure Android SDK is available
+        shell: bash
+        env:
+          ANDROID_PLATFORM: "36"
+          BUILD_TOOLS_VERSION: "35.0.0"
+        run: |
+          set -euo pipefail
+          PLATFORM_DIR="$ANDROID_HOME/platforms/android-${ANDROID_PLATFORM}"
+          BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION}"
+          if [ -d "$PLATFORM_DIR" ] && [ -d "$BUILD_TOOLS_DIR" ]; then
+            echo "Requested Android SDK is already installed."
+            exit 0
+          fi
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          fi
+          test -n "$SDKMANAGER"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-${ANDROID_PLATFORM}" "build-tools;${BUILD_TOOLS_VERSION}"
+
+      - name: Verify checked-in Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f gradlew
+          test -s gradle/wrapper/gradle-wrapper.jar
+          test -s gradle/wrapper/gradle-wrapper.properties
+          chmod +x ./gradlew
+          ./gradlew --version
+
+      - name: Run validated Gradle tasks
+        shell: bash
+        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest assembleDebug lintDebug
