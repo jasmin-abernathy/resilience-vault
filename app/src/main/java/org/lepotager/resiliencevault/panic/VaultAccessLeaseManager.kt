@@ -2,6 +2,10 @@ package org.lepotager.resiliencevault.panic
 
 import java.util.IdentityHashMap
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -29,13 +33,15 @@ class VaultAccessLeaseManager internal constructor(
     private val mutex = Mutex()
     private var closedForPanic = false
     private var activeLeases = 0
+    private val jobs = mutableMapOf<Job, Int>()
     private var drainWaiter: CompletableDeferred<Unit>? = null
 
     suspend fun <T> withLease(
         operation: VaultAccessOperation,
         block: suspend () -> T
     ): VaultLeaseExecution<T> {
-        val blocked = acquire(operation)
+        val job = checkNotNull(currentCoroutineContext()[Job])
+        val blocked = acquire(operation, job)
         if (blocked != null) {
             return VaultLeaseExecution.Blocked(blocked)
         }
@@ -43,7 +49,7 @@ class VaultAccessLeaseManager internal constructor(
         return try {
             VaultLeaseExecution.Completed(block())
         } finally {
-            release()
+            withContext(NonCancellable) { release(job) }
         }
     }
 
@@ -61,8 +67,20 @@ class VaultAccessLeaseManager internal constructor(
         return PanicEffectResult.COMPLETED
     }
 
+    /** Real crypto integration cancels lease owners before draining. */
+    suspend fun cancelAndDrainForPanic(): PanicEffectResult {
+        val active = mutex.withLock {
+            closedForPanic = true
+            jobs.keys.toList()
+        }
+        val caller = currentCoroutineContext()[Job]
+        check(caller !in active) { "Panic must not run inside its own lease" }
+        active.forEach { it.cancel() }
+        return closeAndDrainForPanic()
+    }
+
     private suspend fun acquire(
-        operation: VaultAccessOperation
+        operation: VaultAccessOperation, job: Job
     ): VaultAccessBlockReason? = mutex.withLock {
         @Suppress("UNUSED_VARIABLE")
         val operationForAudit = operation
@@ -80,16 +98,19 @@ class VaultAccessLeaseManager internal constructor(
                     VaultAccessBlockReason.PANIC_IN_PROGRESS
                 } else {
                     activeLeases += 1
+                    jobs[job] = (jobs[job] ?: 0) + 1
                     null
                 }
             }
         }
     }
 
-    private suspend fun release() {
+    private suspend fun release(job: Job) {
         mutex.withLock {
             check(activeLeases > 0) { "Vault access lease underflow" }
             activeLeases -= 1
+            val remaining = checkNotNull(jobs[job]) - 1
+            if (remaining == 0) jobs.remove(job) else jobs[job] = remaining
             if (activeLeases == 0) {
                 drainWaiter?.complete(Unit)
                 drainWaiter = null
