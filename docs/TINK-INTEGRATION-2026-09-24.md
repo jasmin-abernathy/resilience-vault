@@ -50,3 +50,45 @@ Sources API vérifiées sur Tink v1.23.0 :
 - https://developer.android.com/privacy-and-security/keystore
 
 PRODUCTION_CRYPTO_READY et SMS_REMOTE_PANIC_READY restent false. Aucun backend n'est considéré production-ready. Le présent document décrit une implémentation partielle testable, pas une garantie de suppression/récupération après destruction totale.
+
+## Follow-up: durable KEK rotation and lifecycle assembly
+
+`VaultKekRotation` and `AndroidVaultRotationEffects` now implement KEK-only rotation.
+The E/D epoch stays unchanged. The rotation alias suffix `.r<registry revision>`
+is independently bound to the wrapping AEAD associated data. A durable BEGIN intent
+and registry containing both aliases precede key generation. The new encrypted E is
+synced, read back, opened and tested against an encrypted proof made with the original E
+before the old KEK can be deleted. Registry finalization and COMMITTED follow deletion.
+Repeated rotations retain one alias. Missing/corrupt/incomplete rotation state blocks
+opening; there is no automatic repair, fallback or key regeneration. Interrupted rotation
+may require recovery from the external kit. The local digest is corruption detection,
+not an authenticated anti-rollback counter.
+
+`AndroidVaultLifecycle` is an internal singleton per installation directory. Provisioning,
+opening and rotation share the same runtime operation mutex and panic leases. It refuses
+fresh provisioning while orphan KEKs exist. It requires an already initialized IDLE panic
+record; first-install state initialization is deliberately not inferred from missing files.
+It is NOT yet invoked by the production UI. The credential removal callback is mandatory
+and must be provided once by the app's read-credential owner; no cloud credential backend
+is invented by this assembly.
+
+Panic closes admission and invalidates sessions immediately, then cancels and drains all
+leases, including queued mutations and key-opening operations. Destruction now requires
+a successfully completed drain, not merely an empty set of published sessions. A timeout
+or cancelled drain cannot authorize destruction. Actual Android alias inventory covers
+ALL `rv.kek.v1.*` keys in this app's Keystore namespace, including incomplete provisioning
+and rotation orphans even if journal/registry files are missing or corrupt. All deletion
+attempts are made after a partial failure, but any error or residual alias prevents success.
+Other Keystore namespaces are preserved. No network is needed.
+
+Added JVM tests exercise repeated real-Tink rotation, cuts after every rotation boundary,
+corrupted readback, identity/key failures, orphan/partial/repeated deletion, serialization
+against panic and cancelled-drain refusal. These are not physical Android durability tests.
+
+Remaining integration work: BiometricPrompt UI and cancellation; trusted read-credential
+removal; first-install panic-state ceremony; durable device-B object/manifest publication;
+real active-head/storage-scope adapters; file inventory and larger encrypted staging;
+physical crash/reboot/full-disk/Keystore tests and audit. Production and SMS gates remain
+false. Earlier statements above that rotation and singleton assembly were missing describe
+the initial PR commit and are superseded only by this section; UI/backend/device validation
+are still open.

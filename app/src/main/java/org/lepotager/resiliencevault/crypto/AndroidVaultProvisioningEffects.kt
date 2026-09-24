@@ -37,11 +37,12 @@ internal class AndroidVaultProvisioningEffects(
 }
 
 /** Singleton lock/latch per canonical path, including verification after AtomicFile finishWrite. */
-internal class VerifiedEpochEnvelopeFile(path: File) {
+internal class VerifiedEpochEnvelopeFile(
+    path: File, private val maxBytes: Int = TinkVaultSession.MAX_KEYSET_BYTES + 152,
+) {
     private class Guard { var failed = false }
     companion object {
         private val guards = mutableMapOf<String, Guard>()
-        private const val MAX_BYTES = TinkVaultSession.MAX_KEYSET_BYTES + 152
         @Synchronized private fun guard(path: String): Guard = guards.getOrPut(path) { Guard() }
     }
     private val path = path.canonicalFile
@@ -52,8 +53,8 @@ internal class VerifiedEpochEnvelopeFile(path: File) {
         check(!guard.failed) { "Envelope store unavailable" }
         try {
             atomic.openRead().use { input ->
-                val bytes = input.readNBytesCompat(MAX_BYTES + 1)
-                require(bytes.isNotEmpty() && bytes.size <= MAX_BYTES)
+                val bytes = input.readNBytesCompat(maxBytes + 1)
+                require(bytes.isNotEmpty() && bytes.size <= maxBytes)
                 bytes
             }
         } catch (missing: FileNotFoundException) {
@@ -67,7 +68,7 @@ internal class VerifiedEpochEnvelopeFile(path: File) {
 
     fun write(bytes: ByteArray) = synchronized(guard) {
         check(!guard.failed)
-        require(bytes.size in 1..MAX_BYTES)
+        require(bytes.size in 1..maxBytes)
         var stream: FileOutputStream? = null
         try {
             val parent = checkNotNull(path.parentFile)

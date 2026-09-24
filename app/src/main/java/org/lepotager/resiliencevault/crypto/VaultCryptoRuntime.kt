@@ -2,6 +2,8 @@ package org.lepotager.resiliencevault.crypto
 
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.lepotager.resiliencevault.panic.LocalCriticalPanicEffects
 import org.lepotager.resiliencevault.panic.PanicEffectResult
 import org.lepotager.resiliencevault.panic.VaultAccessLeaseManager
@@ -18,11 +20,14 @@ internal class VaultCryptoRuntime(
 ) : LocalCriticalPanicEffects {
     private val monitor = Any()
     private var closed = false
+    private var drained = false
+    private val operations = Mutex()
     private val sessions = Collections.newSetFromMap(IdentityHashMap<TinkVaultSession, Boolean>())
 
     suspend fun <T> useSession(operation: VaultAccessOperation, open: () -> TinkVaultSession,
                               block: suspend (TinkVaultSession) -> T): VaultLeaseExecution<T> =
         leases.withLease(operation) {
+          operations.withLock {
             synchronized(monitor) { check(!closed) }
             val session = open()
             synchronized(monitor) {
@@ -41,6 +46,7 @@ internal class VaultCryptoRuntime(
                 session.close()
                 synchronized(monitor) { sessions.remove(session) }
             }
+          }
         }
 
     override suspend fun invalidateInFlightAccess(): PanicEffectResult {
@@ -49,10 +55,12 @@ internal class VaultCryptoRuntime(
             closed = true
             sessions.forEach { it.close() }
         }
-        return leases.cancelAndDrainForPanic()
+        val result = leases.cancelAndDrainForPanic()
+        if (result == PanicEffectResult.COMPLETED) synchronized(monitor) { drained = true }
+        return result
     }
     override suspend fun destroyLocalReadCapability(): PanicEffectResult {
-        synchronized(monitor) { check(closed && sessions.isEmpty()) }
+        synchronized(monitor) { check(closed && drained && sessions.isEmpty()) }
         destroyAliases() // Exceptions remain failures, never inferred absence.
         removeReadCredentials() // Separate from the optional DELETE-only capsule.
         return PanicEffectResult.COMPLETED
