@@ -5,6 +5,7 @@ import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.lepotager.resiliencevault.cloud.CredentialNamespaces
 import org.lepotager.resiliencevault.panic.AtomicFilePanicStateStore
 import org.lepotager.resiliencevault.panic.PanicInitializationResult
 import org.lepotager.resiliencevault.panic.PanicPersistentState
@@ -315,24 +316,32 @@ internal class AndroidFirstInstallSecurityCeremony private constructor(
             val footprintProbe = SecurityFootprintProbe {
                 try {
                     val aliases = AndroidVaultKek(context).aliases()
-                    if (aliases.any { it.startsWith("rv.kek.v1.") }) {
+                    if (
+                        aliases.any {
+                            it.startsWith("rv.kek.v1.") ||
+                                it.startsWith(CredentialNamespaces.READ_ALIAS_PREFIX) ||
+                                it.startsWith(CredentialNamespaces.DELETE_ONLY_ALIAS_PREFIX)
+                        }
+                    ) {
                         return@SecurityFootprintProbe SecurityFootprintRead.PRESENT
                     }
 
-                    val security = File(context.noBackupFilesDir, "security")
-                    if (!security.exists()) {
-                        SecurityFootprintRead.CLEAN
-                    } else if (!security.isDirectory) {
-                        SecurityFootprintRead.PRESENT
-                    } else {
-                        val children = security.listFiles()
+                    val artifactDirectories = listOf(
+                        File(context.noBackupFilesDir, "security"),
+                        File(context.noBackupFilesDir, "credentials"),
+                    )
+                    artifactDirectories.forEach { directory ->
+                        if (!directory.exists()) return@forEach
+                        if (!directory.isDirectory) {
+                            return@SecurityFootprintProbe SecurityFootprintRead.PRESENT
+                        }
+                        val children = directory.listFiles()
                             ?: return@SecurityFootprintProbe SecurityFootprintRead.UNAVAILABLE
-                        if (children.isEmpty()) {
-                            SecurityFootprintRead.CLEAN
-                        } else {
-                            SecurityFootprintRead.PRESENT
+                        if (children.isNotEmpty()) {
+                            return@SecurityFootprintProbe SecurityFootprintRead.PRESENT
                         }
                     }
+                    SecurityFootprintRead.CLEAN
                 } catch (_: Exception) {
                     SecurityFootprintRead.UNAVAILABLE
                 }
