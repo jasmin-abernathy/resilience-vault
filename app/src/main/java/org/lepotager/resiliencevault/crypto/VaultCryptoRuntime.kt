@@ -24,12 +24,14 @@ internal class VaultCryptoRuntime(
     private val operations = Mutex()
     private val sessions = Collections.newSetFromMap(IdentityHashMap<TinkVaultSession, Boolean>())
 
-    suspend fun <T> useSession(operation: VaultAccessOperation, open: () -> TinkVaultSession,
+    suspend fun <T> useSession(operation: VaultAccessOperation, open: suspend () -> TinkVaultSession,
                               block: suspend (TinkVaultSession) -> T): VaultLeaseExecution<T> =
         leases.withLease(operation) {
           operations.withLock {
+            currentCoroutineContext().ensureActive()
             synchronized(monitor) { check(!closed) }
             val session = open()
+            currentCoroutineContext().ensureActive()
             synchronized(monitor) {
                 if (closed) {
                     session.close()

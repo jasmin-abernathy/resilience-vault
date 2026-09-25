@@ -4,6 +4,7 @@ import com.google.crypto.tink.Aead
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.aead.PredefinedAeadParameters
 import java.io.IOException
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -29,12 +30,12 @@ class VaultProvisioningTransactionTest {
             check(key == null); TinkVaultSession.register()
             key = KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM).aead(); boundary()
         }
-        override fun wrapper(record: VaultProvisioningJournal): Aead { boundary(); return checkNotNull(key) }
+        override fun localKek(record: VaultProvisioningJournal): LocalKekEnvelope { boundary(); return TestLocalKekEnvelope(checkNotNull(key)) }
         override fun writeEnvelope(bytes: ByteArray) { blob = bytes.copyOf(); boundary() }
         override fun publishRegistry(record: VaultSecurityRegistryRecord) { r = VaultSecurityRegistryRead.Ready(record); boundary() }
         override fun alias(record: VaultProvisioningJournal) = "rv.test"
     }
-    @Test fun provisioningAndReopenUseSameEpochKey() {
+    @Test fun provisioningAndReopenUseSameEpochKey() = runTest {
         val effects = Effects()
         val transaction = VaultProvisioningTransaction(effects)
         transaction.createExplicit(initial).use { created ->
@@ -44,37 +45,37 @@ class VaultProvisioningTransactionTest {
                 assertArrayEquals(byteArrayOf(1, 2, 3), opened.decryptObject(context, encrypted))
             }
         }
-        assertThrows(Exception::class.java) { transaction.createExplicit(initial) }
+        assertSuspendFails { transaction.createExplicit(initial) }
     }
-    @Test fun interruptionAtEverySideEffectNeverInventsReadyState() {
+    @Test fun interruptionAtEverySideEffectNeverInventsReadyState() = runTest {
         val baseline = Effects()
         VaultProvisioningTransaction(baseline).createExplicit(initial).close()
         for (cut in 1..baseline.calls) {
             val effects = Effects(cut)
-            assertThrows(Exception::class.java) { VaultProvisioningTransaction(effects).createExplicit(initial) }
+            assertSuspendFails { VaultProvisioningTransaction(effects).createExplicit(initial) }
             effects.failAt = -1
             val reboot = VaultProvisioningTransaction(effects)
             if (effects.j == VaultJournalRead.Ready(committed)) {
                 reboot.openExisting(committed).close()
             } else {
-                assertThrows(Exception::class.java) { reboot.openExisting(committed) }
+                assertSuspendFails { reboot.openExisting(committed) }
             }
             if (effects.j != VaultJournalRead.Missing) {
-                assertThrows(Exception::class.java) { reboot.createExplicit(initial) }
+                assertSuspendFails { reboot.createExplicit(initial) }
             }
         }
     }
-    @Test fun missingKeyCorruptRegistryAndJournalNeverRegenerate() {
+    @Test fun missingKeyCorruptRegistryAndJournalNeverRegenerate() = runTest {
         val effects = Effects()
         val transaction = VaultProvisioningTransaction(effects)
         transaction.createExplicit(initial).close()
         effects.key = null
-        assertThrows(Exception::class.java) { transaction.openExisting(committed) }
-        assertThrows(Exception::class.java) { transaction.createExplicit(initial) }
+        assertSuspendFails { transaction.openExisting(committed) }
+        assertSuspendFails { transaction.createExplicit(initial) }
         effects.r = VaultSecurityRegistryRead.Unavailable
-        assertThrows(Exception::class.java) { transaction.openExisting(committed) }
+        assertSuspendFails { transaction.openExisting(committed) }
         effects.j = VaultJournalRead.Unavailable
-        assertThrows(Exception::class.java) { transaction.createExplicit(initial) }
+        assertSuspendFails { transaction.createExplicit(initial) }
         assertNull(effects.key)
     }
 }

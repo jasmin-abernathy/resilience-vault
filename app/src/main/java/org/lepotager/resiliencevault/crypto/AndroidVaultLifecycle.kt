@@ -39,29 +39,29 @@ internal class AndroidVaultLifecycle private constructor(
      */
     suspend fun initializeFirstInstallPanicState() = panicStore.initializeFresh()
 
-    suspend fun createExplicit(identity: VaultProvisioningJournal, auth: PerUseCipherAuthorization): VaultLeaseExecution<Unit> =
+    suspend fun createExplicit(identity: VaultProvisioningJournal, prompt: AuthenticatedCipherPrompt): VaultLeaseExecution<Unit> =
         runtime.useSession(VaultAccessOperation.RESTORE, {
-            check(AndroidVaultRotationEffects(context, identity, auth).state() == null)
+            check(AndroidVaultRotationEffects(context, identity, prompt).state() == null)
             check(key.aliases().none { it.startsWith("rv.kek.v1.") }) { "Orphan KEK prevents fresh provisioning" }
-            VaultProvisioningTransaction(AndroidVaultProvisioningEffects(context, identity, auth)).createExplicit(identity)
+            VaultProvisioningTransaction(AndroidVaultProvisioningEffects(context, identity, prompt)).createExplicit(identity)
         }) { Unit }
 
     /** Block must not retain handles/plaintext or publish after its lease ends. */
-    suspend fun <T> useExisting(identity: VaultProvisioningJournal, auth: PerUseCipherAuthorization,
+    suspend fun <T> useExisting(identity: VaultProvisioningJournal, prompt: AuthenticatedCipherPrompt,
                                operation: VaultAccessOperation, block: suspend (TinkVaultSession) -> T): VaultLeaseExecution<T> =
-        runtime.useSession(operation, { open(identity, auth) }, block)
+        runtime.useSession(operation, { open(identity, prompt) }, block)
 
-    suspend fun rotate(identity: VaultProvisioningJournal, auth: PerUseCipherAuthorization): VaultLeaseExecution<Unit> =
-        runtime.useSession(VaultAccessOperation.RESTORE, { open(identity, auth) }) { session ->
-            VaultKekRotation(AndroidVaultRotationEffects(context, identity, auth)).rotate(session)
+    suspend fun rotate(identity: VaultProvisioningJournal, prompt: AuthenticatedCipherPrompt): VaultLeaseExecution<Unit> =
+        runtime.useSession(VaultAccessOperation.RESTORE, { open(identity, prompt) }) { session ->
+            VaultKekRotation(AndroidVaultRotationEffects(context, identity, prompt)).rotate(session)
         }
 
-    private fun open(identity: VaultProvisioningJournal, auth: PerUseCipherAuthorization): TinkVaultSession {
+    private suspend fun open(identity: VaultProvisioningJournal, prompt: AuthenticatedCipherPrompt): TinkVaultSession {
         require(identity.phase == VaultProvisioningPolicy.JournalPhase.COMMITTED)
         check(AtomicVaultProvisioningJournalStore.forVault(context, identity).read() == VaultJournalRead.Ready(identity))
-        val rotation = AndroidVaultRotationEffects(context, identity, auth)
+        val rotation = AndroidVaultRotationEffects(context, identity, prompt)
         return if (rotation.state() == null) {
-            VaultProvisioningTransaction(AndroidVaultProvisioningEffects(context, identity, auth)).openExisting(identity)
+            VaultProvisioningTransaction(AndroidVaultProvisioningEffects(context, identity, prompt)).openExisting(identity)
         } else {
             VaultKekRotation(rotation).openExisting(identity.vaultIdHex, identity.generationHex, identity.epoch)
         }

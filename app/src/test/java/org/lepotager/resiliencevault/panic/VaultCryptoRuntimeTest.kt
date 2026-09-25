@@ -78,4 +78,36 @@ class VaultCryptoRuntimeTest {
         assertTrue(destroyed); assertFalse(queuedOpened)
     }
 
+    @Test fun panicDuringSuspendedOpenCancelsBeforeSessionPublication() = runTest {
+        var destroyed = false
+        val runtime = VaultCryptoRuntime(
+            VaultAccessLeaseManager(InMemoryPanicStateStore()),
+            { destroyed = true },
+            {},
+        )
+        val promptEntered = CompletableDeferred<Unit>()
+        var blockEntered = false
+        val active = async {
+            runtime.useSession(
+                VaultAccessOperation.READ,
+                open = {
+                    promptEntered.complete(Unit)
+                    awaitCancellation()
+                },
+            ) {
+                blockEntered = true
+                Unit
+            }
+        }
+
+        promptEntered.await()
+        assertEquals(PanicEffectResult.COMPLETED, runtime.invalidateInFlightAccess())
+        active.join()
+
+        assertTrue(active.isCancelled)
+        assertFalse(blockEntered)
+        assertEquals(PanicEffectResult.COMPLETED, runtime.destroyLocalReadCapability())
+        assertTrue(destroyed)
+    }
+
 }
