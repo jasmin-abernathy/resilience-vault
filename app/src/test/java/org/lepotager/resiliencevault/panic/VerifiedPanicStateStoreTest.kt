@@ -49,6 +49,41 @@ class VerifiedPanicStateStoreTest {
     }
 
     @Test
+    fun explicit_first_install_initializes_only_missing_state_and_never_resets_corruption() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+
+        val missing = FakeStateFile().apply { bytes = null }
+        val fresh = VerifiedPanicStateStore(missing, dispatcher)
+        assertTrue(fresh.read() is PanicStoreReadResult.Unavailable)
+        assertTrue(fresh.initializeFresh() is PanicInitializationResult.Created)
+        assertEquals(PanicPersistentState.initial(), (fresh.read() as PanicStoreReadResult.Ready).state)
+        assertTrue(fresh.initializeFresh() is PanicInitializationResult.AlreadyInitialized)
+        assertEquals(1, missing.writes)
+
+        val corrupt = FakeStateFile().apply { bytes = byteArrayOf(1, 2, 3) }
+        val broken = VerifiedPanicStateStore(corrupt, dispatcher)
+        assertTrue(broken.initializeFresh() is PanicInitializationResult.Unavailable)
+        assertEquals(0, corrupt.writes)
+
+        val pending = PanicPersistentState(phase = PanicPhase.LOCAL_PENDING, panicIdHex = "e".repeat(64))
+        val existing = FakeStateFile().apply { bytes = PanicStateCodec.encode(pending) }
+        val existingStore = VerifiedPanicStateStore(existing, dispatcher)
+        assertTrue(existingStore.initializeFresh() is PanicInitializationResult.AlreadyInitialized)
+        assertEquals(pending, (existingStore.read() as PanicStoreReadResult.Ready).state)
+        assertEquals(0, existing.writes)
+    }
+
+    @Test
+    fun failed_first_install_commit_latches_closed() = runTest {
+        val file = FakeStateFile().apply { bytes = null; ignoreWrites = true }
+        val store = VerifiedPanicStateStore(file, StandardTestDispatcher(testScheduler))
+        assertTrue(store.initializeFresh() is PanicInitializationResult.Unavailable)
+        file.ignoreWrites = false
+        assertTrue(store.initializeFresh() is PanicInitializationResult.Unavailable)
+        assertTrue(store.read() is PanicStoreReadResult.Unavailable)
+    }
+
+    @Test
     fun real_threads_sharing_store_have_one_committed_winner() = runTest {
         val file = FakeStateFile()
         val store = VerifiedPanicStateStore(file)

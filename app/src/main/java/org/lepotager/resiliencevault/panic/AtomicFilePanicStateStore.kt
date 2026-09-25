@@ -16,8 +16,9 @@ import kotlinx.coroutines.Dispatchers
  * Device kill/power-loss tests are still required before activating destructive effects.
  */
 class AtomicFilePanicStateStore private constructor(
-    delegate: PanicStateStore
-) : PanicStateStore by delegate {
+    private val verified: VerifiedPanicStateStore
+) : PanicStateStore by verified {
+    internal suspend fun initializeFresh(): PanicInitializationResult = verified.initializeFresh()
     companion object {
         private val instances = mutableMapOf<String, AtomicFilePanicStateStore>()
 

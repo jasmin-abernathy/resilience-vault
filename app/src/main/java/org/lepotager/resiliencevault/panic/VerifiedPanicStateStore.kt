@@ -15,7 +15,15 @@ internal interface PanicStateFile {
     fun write(bytes: ByteArray)
 }
 
-/** Testable transaction boundary; does not provision/reset a missing record. */
+internal sealed interface PanicInitializationResult {
+    data object Created : PanicInitializationResult
+    data object AlreadyInitialized : PanicInitializationResult
+    data class Unavailable(val failure: PanicStoreFailure) : PanicInitializationResult
+}
+
+/** Testable transaction boundary. Missing state is fail-closed unless initializeFresh()
+ * is called explicitly during the first-install ceremony. Corrupt/existing state is never reset.
+ */
 internal class VerifiedPanicStateStore(
     private val file: PanicStateFile,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO
@@ -25,6 +33,45 @@ internal class VerifiedPanicStateStore(
 
     override suspend fun read(): PanicStoreReadResult = withContext(dispatcher) {
         mutex.withLock { readUnlocked() }
+    }
+
+    suspend fun initializeFresh(): PanicInitializationResult = withContext(dispatcher) {
+        mutex.withLock {
+            when (failureLatch) {
+                PanicStoreFailure.CORRUPT, PanicStoreFailure.IO_ERROR, PanicStoreFailure.COMMIT_FAILED ->
+                    return@withLock PanicInitializationResult.Unavailable(checkNotNull(failureLatch))
+                else -> Unit
+            }
+            try {
+                PanicStateCodec.decode(file.read())
+                failureLatch = null
+                return@withLock PanicInitializationResult.AlreadyInitialized
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: FileNotFoundException) {
+                // The only state that may be initialized. Never treat corruption/IO as absence.
+            } catch (_: PanicStateCorruptionException) {
+                failureLatch = PanicStoreFailure.CORRUPT
+                return@withLock PanicInitializationResult.Unavailable(PanicStoreFailure.CORRUPT)
+            } catch (_: Exception) {
+                failureLatch = PanicStoreFailure.IO_ERROR
+                return@withLock PanicInitializationResult.Unavailable(PanicStoreFailure.IO_ERROR)
+            }
+
+            val bytes = PanicStateCodec.encode(PanicPersistentState.initial())
+            try {
+                file.write(bytes)
+                if (!file.read().contentEquals(bytes)) throw IOException("Initial state commit verification failed")
+            } catch (cancelled: CancellationException) {
+                failureLatch = PanicStoreFailure.COMMIT_FAILED
+                throw cancelled
+            } catch (_: Exception) {
+                failureLatch = PanicStoreFailure.COMMIT_FAILED
+                return@withLock PanicInitializationResult.Unavailable(PanicStoreFailure.COMMIT_FAILED)
+            }
+            failureLatch = null
+            PanicInitializationResult.Created
+        }
     }
 
     private fun unavailable(failure: PanicStoreFailure): PanicStoreReadResult.Unavailable {
