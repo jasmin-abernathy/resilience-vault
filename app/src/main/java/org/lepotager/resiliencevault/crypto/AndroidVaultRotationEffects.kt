@@ -1,13 +1,12 @@
 package org.lepotager.resiliencevault.crypto
 
 import android.content.Context
-import com.google.crypto.tink.Aead
 import java.io.File
 
 internal class AndroidVaultRotationEffects(
     context: Context,
     private val identity: VaultProvisioningJournal,
-    private val authorization: PerUseCipherAuthorization,
+    private val prompt: AuthenticatedCipherPrompt,
 ) : VaultKekRotationEffects {
     private val key = AndroidVaultKek(context)
     private val registryStore = AtomicVaultSecurityRegistryStore.create(context)
@@ -32,6 +31,7 @@ internal class AndroidVaultRotationEffects(
         registryStore.replaceExpected(expected, next)
     override fun exists(alias: String) = key.aliasExists(alias)
     override fun createKey(record: VaultKekRotationRecord) = key.createForRotation(record, this)
-    override fun wrapper(alias: String): Aead = AndroidAuthenticatedKekAead({ key.lookupAlias(alias) }, authorization)
+    override fun localKek(alias: String): LocalKekEnvelope =
+        AuthenticatedLocalKekEnvelope({ key.lookupAlias(alias) }, prompt)
     override fun deleteKey(alias: String) = key.deleteAlias(alias)
 }

@@ -4,6 +4,7 @@ import com.google.crypto.tink.Aead
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.aead.PredefinedAeadParameters
 import java.io.IOException
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -38,7 +39,21 @@ class VaultKekRotationTest {
         override fun createKey(record: VaultKekRotationRecord) {
             check(record.newAlias !in keys); keys[record.newAlias] = newKey(); boundary()
         }
-        override fun wrapper(alias: String): Aead { boundary(); return checkNotNull(keys[alias]) }
+        val observedAad = mutableListOf<Pair<String, ByteArray>>()
+        override fun localKek(alias: String): LocalKekEnvelope {
+            boundary()
+            val delegate = TestLocalKekEnvelope(checkNotNull(keys[alias]))
+            return object : LocalKekEnvelope {
+                override suspend fun encryptKeyset(handle: KeysetHandle, aad: ByteArray): ByteArray {
+                    observedAad += alias to aad.copyOf()
+                    return delegate.encryptKeyset(handle, aad)
+                }
+                override suspend fun decryptKeyset(envelope: ByteArray, aad: ByteArray): KeysetHandle {
+                    observedAad += alias to aad.copyOf()
+                    return delegate.decryptKeyset(envelope, aad)
+                }
+            }
+        }
         override fun deleteKey(alias: String) {
             check(record?.phase == VaultKekRotationRecord.Phase.VERIFIED)
             check(keys.containsKey(checkNotNull(record).newAlias))
@@ -49,7 +64,7 @@ class VaultKekRotationTest {
         TinkVaultSession.register()
         return KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM).aead()
     }
-    @Test fun repeatRotationPreservesObjectsAndDeletesOnlyPreviousAlias() {
+    @Test fun repeatRotationPreservesObjectsAndDeletesOnlyPreviousAlias() = runTest {
         val effects = Effects()
         TinkVaultSession.create(vault, generation, 1).use { session ->
             val binding = session.context(VaultBinding.Purpose.OBJECT_DATA, "33".repeat(32), 1)
@@ -60,16 +75,22 @@ class VaultKekRotationTest {
                     assertArrayEquals(byteArrayOf(1, 2, 3), opened.decryptObject(binding, ciphertext))
                 }
                 assertEquals(setOf(effects.reg.aliases.single()), effects.keys.keys)
+                assertTrue(effects.observedAad.isNotEmpty())
+                effects.observedAad.forEach { (alias, aad) ->
+                    val suffix = alias.toByteArray(Charsets.US_ASCII)
+                    assertTrue(aad.size >= suffix.size)
+                    assertArrayEquals(suffix, aad.copyOfRange(aad.size - suffix.size, aad.size))
+                }
             }
         }
     }
-    @Test fun everyInterruptionBlocksIncompleteRotationAndNeverLosesBothKeys() {
+    @Test fun everyInterruptionBlocksIncompleteRotationAndNeverLosesBothKeys() = runTest {
         val baseline = Effects()
         TinkVaultSession.create(vault, generation, 1).use { VaultKekRotation(baseline).rotate(it) }
         for (cut in 1..baseline.calls) {
             val effects = Effects().apply { failAt = cut }
             TinkVaultSession.create(vault, generation, 1).use { session ->
-                assertThrows(Exception::class.java) { VaultKekRotation(effects).rotate(session) }
+                assertSuspendFails { VaultKekRotation(effects).rotate(session) }
             }
             effects.failAt = -1
             assertTrue(effects.keys.isNotEmpty())
@@ -77,7 +98,7 @@ class VaultKekRotationTest {
             if (state?.phase == VaultKekRotationRecord.Phase.COMMITTED) {
                 VaultKekRotation(effects).openExisting(vault, generation, 1).close()
             } else {
-                assertThrows(Exception::class.java) { VaultKekRotation(effects).openExisting(vault, generation, 1) }
+                assertSuspendFails { VaultKekRotation(effects).openExisting(vault, generation, 1) }
             }
             if (effects.oldDeleted) {
                 assertNotNull(state)
@@ -86,20 +107,20 @@ class VaultKekRotationTest {
             }
         }
     }
-    @Test fun corruptReadbackWrongIdentityAndMissingNewKeyFailClosed() {
+    @Test fun corruptReadbackWrongIdentityAndMissingNewKeyFailClosed() = runTest {
         val broken = Effects().apply { corruptEnvelope = true }
         TinkVaultSession.create(vault, generation, 1).use { session ->
-            assertThrows(Exception::class.java) { VaultKekRotation(broken).rotate(session) }
+            assertSuspendFails { VaultKekRotation(broken).rotate(session) }
         }
         assertFalse(broken.oldDeleted)
         val effects = Effects()
         TinkVaultSession.create(vault, generation, 1).use { VaultKekRotation(effects).rotate(it) }
-        assertThrows(Exception::class.java) { VaultKekRotation(effects).openExisting("44".repeat(32), generation, 1) }
+        assertSuspendFails { VaultKekRotation(effects).openExisting("44".repeat(32), generation, 1) }
         val bytes = VaultKekRotationCodec.encode(checkNotNull(effects.record))
         assertThrows(Exception::class.java) { VaultKekRotationCodec.decode(bytes + 0) }
         bytes[0] = 0
         assertThrows(Exception::class.java) { VaultKekRotationCodec.decode(bytes) }
         effects.keys.clear()
-        assertThrows(Exception::class.java) { VaultKekRotation(effects).openExisting(vault, generation, 1) }
+        assertSuspendFails { VaultKekRotation(effects).openExisting(vault, generation, 1) }
     }
 }

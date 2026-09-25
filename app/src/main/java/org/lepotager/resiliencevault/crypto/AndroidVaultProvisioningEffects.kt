@@ -4,7 +4,6 @@ import android.content.Context
 import android.system.Os
 import android.system.OsConstants
 import android.util.AtomicFile
-import com.google.crypto.tink.Aead
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
@@ -14,7 +13,7 @@ import java.io.IOException
 internal class AndroidVaultProvisioningEffects(
     context: Context,
     private val identity: VaultProvisioningJournal,
-    private val authorization: PerUseCipherAuthorization,
+    private val prompt: AuthenticatedCipherPrompt,
 ) : VaultProvisioningEffects {
     private val journalStore = AtomicVaultProvisioningJournalStore.forVault(context, identity)
     private val registryStore = AtomicVaultSecurityRegistryStore.create(context)
@@ -29,8 +28,8 @@ internal class AndroidVaultProvisioningEffects(
     override fun begin(record: VaultProvisioningJournal) = journalStore.create(record)
     override fun advance(previous: VaultProvisioningJournal, next: VaultProvisioningJournal) = journalStore.advance(previous, next)
     override fun createKey(record: VaultProvisioningJournal) { kek.createExplicitly(journalStore, record) }
-    override fun wrapper(record: VaultProvisioningJournal): Aead =
-        AndroidAuthenticatedKekAead({ kek.loadExisting(journalStore, record) }, authorization)
+    override fun localKek(record: VaultProvisioningJournal): LocalKekEnvelope =
+        AuthenticatedLocalKekEnvelope({ kek.loadExisting(journalStore, record) }, prompt)
     override fun writeEnvelope(bytes: ByteArray) = blob.write(bytes)
     override fun publishRegistry(record: VaultSecurityRegistryRecord) = registryStore.createFresh(record)
     override fun alias(record: VaultProvisioningJournal) = kek.aliasFor(record)

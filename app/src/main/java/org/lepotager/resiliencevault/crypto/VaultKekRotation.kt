@@ -1,6 +1,8 @@
 package org.lepotager.resiliencevault.crypto
 
-import com.google.crypto.tink.Aead
+import com.google.crypto.tink.KeysetHandle
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -32,7 +34,7 @@ internal interface VaultKekRotationEffects {
     fun replaceRegistry(expected: VaultSecurityRegistryRecord, next: VaultSecurityRegistryRecord)
     fun exists(alias: String): Boolean
     fun createKey(record: VaultKekRotationRecord)
-    fun wrapper(alias: String): Aead
+    fun localKek(alias: String): LocalKekEnvelope
     fun deleteKey(alias: String)
 }
 
@@ -40,7 +42,7 @@ internal interface VaultKekRotationEffects {
  * No implicit resume, regeneration or old-envelope fallback after any interrupted write.
  */
 internal class VaultKekRotation(private val effects: VaultKekRotationEffects) {
-    fun rotate(session: TinkVaultSession) {
+    suspend fun rotate(session: TinkVaultSession) {
         session.checkLive()
         val previous = effects.state()
         val registry = effects.registry()
@@ -57,15 +59,19 @@ internal class VaultKekRotation(private val effects: VaultKekRotationEffects) {
             "rv.kek.v1.${session.vaultId}.${session.generation}.e${session.epoch}.r$revision",
             VaultKekRotationRecord.Phase.BEGIN, emptyList())
         check(!effects.exists(next.newAlias))
+        active()
         effects.writeState(previous, next) // intent durable before alias creation
         check(effects.state() == next)
         val both = registry.copy(revision = revision, aliases = listOf(oldAlias, next.newAlias).sorted())
+        active()
         effects.replaceRegistry(registry, both)
         check(effects.registry() == both)
+        active()
         effects.createKey(next)
         check(effects.exists(next.newAlias))
-        val envelope = session.wrapLocal(boundWrapper(next.newAlias))
+        val envelope = session.wrapLocal(boundEnvelope(next.newAlias))
         val verified = next.copy(phase = VaultKekRotationRecord.Phase.VERIFIED, envelope = envelope.toList())
+        active()
         effects.writeState(next, verified)
         check(effects.state() == verified)
         // Verify the persisted envelope actually contains the SAME E, not merely a valid keyset.
@@ -75,17 +81,20 @@ internal class VaultKekRotation(private val effects: VaultKekRotationEffects) {
         openEnvelope(verified).use { check(it.openManifest(binding, sealed).contentEquals(proof)) }
         session.checkLive()
         check(effects.registry() == both && effects.state() == verified)
+        active()
         effects.deleteKey(oldAlias) // only after durable readback + authenticated SAME-E proof
         check(!effects.exists(oldAlias) && effects.exists(next.newAlias))
         val onlyNew = both.copy(revision = revision + 1, aliases = listOf(next.newAlias))
+        active()
         effects.replaceRegistry(both, onlyNew)
         check(effects.registry() == onlyNew)
         val committed = verified.copy(phase = VaultKekRotationRecord.Phase.COMMITTED)
+        active()
         effects.writeState(verified, committed)
         check(effects.state() == committed)
     }
 
-    fun openExisting(vault: String, generation: String, epoch: Long): TinkVaultSession {
+    suspend fun openExisting(vault: String, generation: String, epoch: Long): TinkVaultSession {
         val record = checkNotNull(effects.state())
         check(record.vault == vault && record.generation == generation)
         validateCommitted(record, effects.registry(), epoch)
@@ -98,18 +107,23 @@ internal class VaultKekRotation(private val effects: VaultKekRotationEffects) {
         check(registry.vaultIdHex == record.vault && registry.generationHex == record.generation &&
             registry.revision == record.registryRevision + 1 && registry.aliases == listOf(record.newAlias))
     }
-    private fun openEnvelope(record: VaultKekRotationRecord) = TinkVaultSession.openLocal(
-        record.vault, record.generation, record.epoch, record.envelope.toByteArray(), boundWrapper(record.newAlias))
+    private suspend fun openEnvelope(record: VaultKekRotationRecord) = TinkVaultSession.openLocal(
+        record.vault, record.generation, record.epoch, record.envelope.toByteArray(), boundEnvelope(record.newAlias))
 
-    private fun boundWrapper(alias: String): Aead {
-        val delegate = effects.wrapper(alias)
+    private fun boundEnvelope(alias: String): LocalKekEnvelope {
+        val delegate = effects.localKek(alias)
         val suffix = alias.toByteArray(Charsets.US_ASCII)
-        return object : Aead {
-            override fun encrypt(plaintext: ByteArray, associatedData: ByteArray): ByteArray =
-                delegate.encrypt(plaintext, associatedData + suffix)
-            override fun decrypt(ciphertext: ByteArray, associatedData: ByteArray): ByteArray =
-                delegate.decrypt(ciphertext, associatedData + suffix)
+        return object : LocalKekEnvelope {
+            override suspend fun encryptKeyset(handle: KeysetHandle, aad: ByteArray): ByteArray =
+                delegate.encryptKeyset(handle, aad + suffix)
+
+            override suspend fun decryptKeyset(envelope: ByteArray, aad: ByteArray): KeysetHandle =
+                delegate.decryptKeyset(envelope, aad + suffix)
         }
+    }
+
+    private suspend fun active() {
+        currentCoroutineContext().ensureActive()
     }
 }
 

@@ -76,6 +76,7 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.01.00"))
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-compose:1.10.0")
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.datastore:datastore-preferences:1.2.1")
     implementation("androidx.documentfile:documentfile:1.1.0")
@@ -85,8 +86,9 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
 
-    // Pinned now so the chosen primitive is compiled/tested before any production crypto is enabled.
-    // PRODUCTION_CRYPTO_READY must remain false until the audited Android Keystore/key-lifecycle lot.
+    // Pinned: the local KEK one-shot adapter relies on v1.23.0 invoking its Aead encrypt once
+    // during serializeEncryptedKeyset. Revalidate that invariant before changing this version.
+    // PRODUCTION_CRYPTO_READY remains false until physical-device validation is complete.
     implementation("com.google.crypto.tink:tink-android:1.23.0")
 
     testImplementation("junit:junit:4.13.2")
