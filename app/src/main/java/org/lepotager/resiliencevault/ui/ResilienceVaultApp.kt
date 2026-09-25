@@ -33,6 +33,10 @@ import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
 import org.lepotager.resiliencevault.BuildConfig
+import org.lepotager.resiliencevault.crypto.AndroidFirstInstallSecurityCeremony
+import org.lepotager.resiliencevault.crypto.FirstInstallRefusal
+import org.lepotager.resiliencevault.crypto.FirstInstallSecurityAction
+import org.lepotager.resiliencevault.crypto.FirstInstallSecurityStatus
 import org.lepotager.resiliencevault.panic.AndroidPanicClock
 import org.lepotager.resiliencevault.panic.AtomicFilePanicStateStore
 import org.lepotager.resiliencevault.panic.PanicAdmissionService
@@ -52,6 +56,7 @@ fun ResilienceVaultApp(settings: VaultSettings) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snapshot by settings.snapshot.collectAsState(initial = null)
+    var securityRefresh by remember { mutableStateOf(0) }
 
     val signalPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -110,7 +115,12 @@ fun ResilienceVaultApp(settings: VaultSettings) {
                 }
             }
 
-            RemotePanicPreparationCard()
+            FirstInstallSecurityCard(
+                refreshToken = securityRefresh,
+                onChanged = { securityRefresh += 1 },
+            )
+
+            RemotePanicPreparationCard(refreshToken = securityRefresh)
 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -124,7 +134,84 @@ fun ResilienceVaultApp(settings: VaultSettings) {
 }
 
 @Composable
-private fun RemotePanicPreparationCard() {
+private fun FirstInstallSecurityCard(
+    refreshToken: Int,
+    onChanged: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val ceremony = remember(context) {
+        AndroidFirstInstallSecurityCeremony(context.applicationContext)
+    }
+    var status by remember { mutableStateOf<FirstInstallSecurityStatus?>(null) }
+    var actionMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(ceremony, refreshToken) {
+        status = ceremony.inspect()
+    }
+
+    if (status == FirstInstallSecurityStatus.AlreadyInitialized) return
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Initialisation de sécurité", style = MaterialTheme.typography.titleMedium)
+
+            when (val current = status) {
+                null -> Text("Vérification de cette installation…")
+                FirstInstallSecurityStatus.Eligible -> {
+                    Text(
+                        "Aucun état de coffre antérieur n’a été détecté. " +
+                            "Initialisez explicitement le registre de sécurité avant toute opération crypto."
+                    )
+                    Button(onClick = {
+                        scope.launch {
+                            actionMessage = when (val result = ceremony.initialize()) {
+                                FirstInstallSecurityAction.Initialized ->
+                                    "Registre de sécurité initialisé."
+                                FirstInstallSecurityAction.AlreadyInitialized ->
+                                    "Le registre était déjà initialisé."
+                                is FirstInstallSecurityAction.Refused ->
+                                    firstInstallRefusalMessage(result.reason)
+                            }
+                            status = ceremony.inspect()
+                            onChanged()
+                        }
+                    }) {
+                        Text("Initialiser cette installation")
+                    }
+                }
+                is FirstInstallSecurityStatus.Refused -> {
+                    Text(firstInstallRefusalMessage(current.reason))
+                    Text(
+                        "Aucune réinitialisation automatique n’est proposée.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                FirstInstallSecurityStatus.AlreadyInitialized -> Unit
+            }
+
+            actionMessage?.let { Text(it) }
+        }
+    }
+}
+
+private fun firstInstallRefusalMessage(reason: FirstInstallRefusal): String =
+    when (reason) {
+        FirstInstallRefusal.PANIC_STATE_UNAVAILABLE ->
+            "L’état de sécurité est illisible, corrompu ou incertain : initialisation refusée."
+        FirstInstallRefusal.SECURITY_FOOTPRINT_PRESENT ->
+            "Des traces de sécurité existent déjà sur cette installation : initialisation refusée."
+        FirstInstallRefusal.VAULT_KEK_PRESENT ->
+            "Une clé de coffre existe déjà dans Android Keystore : initialisation refusée."
+        FirstInstallRefusal.PACKAGE_ALREADY_UPDATED ->
+            "Cette installation a déjà été mise à jour et ne peut pas être qualifiée de neuve automatiquement."
+        FirstInstallRefusal.PLATFORM_EVIDENCE_UNAVAILABLE ->
+            "Impossible de vérifier de façon fiable que cette installation est neuve."
+    }
+
+
+@Composable
+private fun RemotePanicPreparationCard(refreshToken: Int) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val normalizer = remember { PlatformPhoneNumberNormalizer() }
@@ -142,7 +229,7 @@ private fun RemotePanicPreparationCard() {
         scope.launch { persistentState = admission.refreshRemoteState() }
     }
 
-    LaunchedEffect(store) {
+    LaunchedEffect(store, refreshToken) {
         persistentState = admission.refreshRemoteState()
     }
 
