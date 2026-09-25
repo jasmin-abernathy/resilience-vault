@@ -1,6 +1,7 @@
 package org.lepotager.resiliencevault.crypto
 
 import android.content.Context
+import org.lepotager.resiliencevault.cloud.AndroidReadCredentialOwner
 import org.lepotager.resiliencevault.panic.AtomicFilePanicStateStore
 import org.lepotager.resiliencevault.panic.LocalCriticalPanicEffects
 import org.lepotager.resiliencevault.panic.VaultAccessLeaseManagers
@@ -13,24 +14,22 @@ import org.lepotager.resiliencevault.panic.VaultLeaseExecution
  */
 internal class AndroidVaultLifecycle private constructor(
     private val context: Context,
-    private val removeReadCredentials: () -> Unit,
 ) {
     companion object {
         private val instances = mutableMapOf<String, AndroidVaultLifecycle>()
-        @Synchronized fun forInstallation(context: Context, removeReadCredentials: () -> Unit): AndroidVaultLifecycle {
+        @Synchronized fun forInstallation(context: Context): AndroidVaultLifecycle {
             val app = context.applicationContext
             val path = app.noBackupFilesDir.canonicalPath
-            return instances[path]?.also {
-                check(it.removeReadCredentials === removeReadCredentials) { "Conflicting credential owner" }
-            } ?: AndroidVaultLifecycle(app, removeReadCredentials).also { instances[path] = it }
+            return instances[path] ?: AndroidVaultLifecycle(app).also { instances[path] = it }
         }
     }
     private val panicStore = AtomicFilePanicStateStore.create(context)
     private val key = AndroidVaultKek(context)
+    private val readCredentials = AndroidReadCredentialOwner(context)
     private val runtime = VaultCryptoRuntime(
         VaultAccessLeaseManagers.forStore(panicStore),
         { VaultAliasDestruction(key::aliases, key::deleteAlias, key::aliasExists).destroyAll() },
-        removeReadCredentials,
+        { readCredentials.destroyAll() },
     )
     val panicEffects: LocalCriticalPanicEffects get() = runtime
 
