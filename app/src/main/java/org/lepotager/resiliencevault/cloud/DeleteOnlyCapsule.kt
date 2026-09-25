@@ -6,6 +6,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicReference
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
@@ -48,13 +49,20 @@ internal data class DeleteOnlyCapsuleIdentity(
 }
 
 class DeleteOnlyCredential private constructor(
-    private val token: ByteArray,
-) {
+    bytes: ByteArray,
+) : AutoCloseable {
+    private val token = AtomicReference<ByteArray?>(bytes.copyOf())
+
     init {
-        require(token.size == TOKEN_BYTES)
+        require(bytes.size == TOKEN_BYTES)
     }
 
-    internal fun copyToken(): ByteArray = token.copyOf()
+    internal fun copyToken(): ByteArray =
+        checkNotNull(token.get()) { "Delete-only credential already released" }.copyOf()
+
+    override fun close() {
+        token.getAndSet(null)?.fill(0)
+    }
 
     override fun toString(): String = "DeleteOnlyCredential([redacted])"
 
@@ -62,7 +70,7 @@ class DeleteOnlyCredential private constructor(
         const val TOKEN_BYTES = 32
 
         internal fun fromBytes(bytes: ByteArray): DeleteOnlyCredential =
-            DeleteOnlyCredential(bytes.copyOf())
+            DeleteOnlyCredential(bytes)
     }
 }
 
@@ -94,7 +102,7 @@ internal object DeleteOnlyCapsuleCodec {
         try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             // Android Keystore with randomized encryption required must own IV generation.
-            // Caller-supplied IVs can be rejected even when software AES accepts them.
+            // Passing a caller-generated IV can be rejected even though software AES accepts it.
             cipher.init(Cipher.ENCRYPT_MODE, key)
             val iv = cipher.iv.copyOf()
             require(iv.size == IV_BYTES) { "Unexpected delete-only KEK IV length" }
@@ -293,16 +301,17 @@ internal class DeleteOnlyCapsuleProvisioner(
         }
         check(readback.contentEquals(bytes)) { "Delete-only capsule readback mismatch" }
 
-        val reopened = DeleteOnlyCapsuleCodec.open(intent, readback, keys.load(identity))
-        val expected = credential.copyToken()
-        val actual = reopened.copyToken()
-        try {
-            check(MessageDigest.isEqual(expected, actual)) {
-                "Delete-only capsule credential verification failed"
+        DeleteOnlyCapsuleCodec.open(intent, readback, keys.load(identity)).use { reopened ->
+            val expected = credential.copyToken()
+            val actual = reopened.copyToken()
+            try {
+                check(MessageDigest.isEqual(expected, actual)) {
+                    "Delete-only capsule credential verification failed"
+                }
+            } finally {
+                expected.fill(0)
+                actual.fill(0)
             }
-        } finally {
-            expected.fill(0)
-            actual.fill(0)
         }
         return intent
     }
