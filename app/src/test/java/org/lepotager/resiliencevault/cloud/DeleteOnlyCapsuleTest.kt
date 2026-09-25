@@ -133,6 +133,17 @@ class DeleteOnlyCapsuleTest {
     }
 
     @Test
+    fun closing_credential_zeroizes_authority_and_prevents_reuse() {
+        val credential = DeleteOnlyCredential.fromBytes(token)
+        assertArrayEquals(token, credential.copyToken())
+        credential.close()
+        credential.close()
+        assertThrows(IllegalStateException::class.java) {
+            credential.copyToken()
+        }
+    }
+
+    @Test
     fun credential_string_never_contains_token() {
         val credential = DeleteOnlyCredential.fromBytes(token)
         val text = credential.toString()

@@ -17,7 +17,7 @@ import org.lepotager.resiliencevault.panic.RemoteDeleteIntent
  * The KEK deliberately has no user-auth requirement so a post-panic retry can survive lock/reboot.
  * It must never be used for E, READ credentials or any data decryption authority.
  */
-internal class AndroidDeleteOnlyCapsuleOwner(context: Context) {
+internal class AndroidDeleteOnlyCapsuleOwner(context: Context) : DeleteOnlyCapsuleReader {
     private val app = context.applicationContext
     private val provisioner = DeleteOnlyCapsuleProvisioner(
         AndroidDeleteOnlyKekPort(),
@@ -30,7 +30,7 @@ internal class AndroidDeleteOnlyCapsuleOwner(context: Context) {
     ): RemoteDeleteIntent =
         provisioner.provision(identity, credential)
 
-    fun open(intent: RemoteDeleteIntent): DeleteOnlyCredential =
+    override fun open(intent: RemoteDeleteIntent): DeleteOnlyCredential =
         provisioner.open(intent)
 }
 
