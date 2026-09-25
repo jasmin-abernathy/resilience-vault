@@ -11,7 +11,7 @@ class PanicAdmissionBoundaryTest {
 
     @Test
     fun expiration_while_waiting_for_transaction_is_not_bypassed_by_old_envelope() = runTest {
-        val backing = InMemoryPanicStateStore()
+        val backing = knownNoCloudStore()
         var observation = PanicAdmissionObservation(start, true)
         var beforeTransaction: () -> Unit = {}
         val store = object : PanicStateStore by backing {
@@ -36,7 +36,7 @@ class PanicAdmissionBoundaryTest {
 
     @Test
     fun permission_lost_during_verification_is_rechecked() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         var reads = 0
         val service = PanicAdmissionService(store, PanicAdmissionEnvironment {
             reads++
@@ -50,7 +50,7 @@ class PanicAdmissionBoundaryTest {
 
     @Test
     fun unavailable_adapter_and_clock_overflow_cannot_arm() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         assertTrue(PanicAdmissionService(store).armRemote(request) is RemoteArmResult.Rejected)
         val service = PanicAdmissionService(store, PanicAdmissionEnvironment {
             PanicAdmissionObservation(start.copy(utcMs = Long.MAX_VALUE), true)
@@ -62,7 +62,7 @@ class PanicAdmissionBoundaryTest {
 
     @Test
     fun failed_entropy_invalidates_previous_window_and_is_not_reported_as_armed() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val environment = PanicAdmissionEnvironment { PanicAdmissionObservation(start, true) }
         assertTrue(PanicAdmissionService(store, environment).armRemote(request) is RemoteArmResult.Armed)
         val rng = object : SecureRandom() {
@@ -75,7 +75,7 @@ class PanicAdmissionBoundaryTest {
 
     @Test
     fun observation_of_invalid_window_is_persisted_even_if_clock_later_returns() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         var observation = PanicAdmissionObservation(start, true)
         val service = PanicAdmissionService(store, PanicAdmissionEnvironment { observation })
         val armed = service.armRemote(request) as RemoteArmResult.Armed
@@ -85,6 +85,13 @@ class PanicAdmissionBoundaryTest {
         val result = service.acceptSms(ValidatedSmsEnvelope(request.canonicalContactsE164.single(), armed.commands.single().command, true, true))
         assertEquals(AdmissionRejectionReason.NOT_ARMED, (result as AdmissionResult.Rejected).reason)
     }
+
+    private fun knownNoCloudStore(): InMemoryPanicStateStore =
+        InMemoryPanicStateStore(
+            PanicPersistentState.initial().copy(
+                remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED
+            )
+        )
 
     @Test
     fun sensitive_string_representations_are_redacted() {

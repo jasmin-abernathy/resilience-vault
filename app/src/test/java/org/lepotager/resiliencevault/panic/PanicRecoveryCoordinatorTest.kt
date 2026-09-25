@@ -75,8 +75,8 @@ class PanicRecoveryCoordinatorTest {
         val state = ready(store)
         assertFalse(state.purgeComplete)
         assertTrue(state.sessionRevocationComplete)
-        assertTrue(state.remoteDeleteComplete)
-        assertEquals(1, post.remoteCalls)
+        assertEquals(RemoteDeleteCheckpoint.NOT_CONFIGURED, state.remoteDeleteCheckpoint)
+        assertEquals(0, post.remoteCalls)
 
         post.purge = PanicEffectResult.COMPLETED
         val retried = coordinator.resumePostDestruction() as PostRecoveryResult.Progress
@@ -120,7 +120,9 @@ class PanicRecoveryCoordinatorTest {
         InMemoryPanicStateStore(
             PanicPersistentState(
                 phase = PanicPhase.LOCAL_PENDING,
-                panicIdHex = "c".repeat(64)
+                panicIdHex = "c".repeat(64),
+                remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED,
+                remoteDeleteCheckpoint = RemoteDeleteCheckpoint.NOT_CONFIGURED,
             )
         )
 }

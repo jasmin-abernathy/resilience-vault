@@ -12,7 +12,55 @@ enum class PanicPhase {
     IDLE,
     LOCAL_PENDING,
     POST_PENDING,
-    COMPLETE
+    COMPLETE,
+    LEGACY_COMPLETE_UNVERIFIED,
+}
+
+enum class RemoteDeleteConfiguration {
+    UNKNOWN,
+    NOT_CONFIGURED,
+    CONFIGURED,
+}
+
+enum class RemoteDeleteCheckpoint {
+    NOT_CONFIGURED,
+    PENDING,
+    TOMBSTONED_PENDING,
+    BLOCKED_AUTH,
+    COMPLETE,
+    LEGACY_UNPROVEN,
+}
+
+data class RemoteDeleteIntent(
+    val capsuleFormatVersion: Int,
+    val capsuleIdHex: String,
+    val tenantId: String,
+    val vaultIdHex: String,
+    val vaultGenerationHex: String,
+    val serviceId: String,
+    val capsuleSha256Hex: String,
+) {
+    init {
+        require(capsuleFormatVersion == 1)
+        require(isLowerHex(capsuleIdHex, 32) || isLowerHex(capsuleIdHex, 64))
+        require(isCanonicalLabel(tenantId, 128))
+        require(RemotePanicCommand.isLowerHex256(vaultIdHex))
+        require(RemotePanicCommand.isLowerHex256(vaultGenerationHex))
+        require(isCanonicalLabel(serviceId, 64))
+        require(RemotePanicCommand.isLowerHex256(capsuleSha256Hex))
+    }
+
+    override fun toString(): String = "RemoteDeleteIntent([redacted])"
+
+    companion object {
+        private val label = Regex("[a-z0-9][a-z0-9._:@-]*")
+
+        private fun isCanonicalLabel(value: String, maxChars: Int): Boolean =
+            value.length in 1..maxChars && label.matches(value)
+
+        private fun isLowerHex(value: String, length: Int): Boolean =
+            value.length == length && value.all { it in '0'..'9' || it in 'a'..'f' }
+    }
 }
 
 data class PanicClockSnapshot(
@@ -45,51 +93,104 @@ data class PanicPersistentState(
     val panicIdHex: String? = null,
     val purgeComplete: Boolean = false,
     val sessionRevocationComplete: Boolean = false,
-    val remoteDeleteComplete: Boolean = false
+    val remoteDeleteConfiguration: RemoteDeleteConfiguration = RemoteDeleteConfiguration.UNKNOWN,
+    val remoteDeleteCheckpoint: RemoteDeleteCheckpoint? = null,
+    val remoteDeleteIntent: RemoteDeleteIntent? = null,
+    val legacyRemoteUnproven: Boolean = false,
+    val legacyRemoteDeleteComplete: Boolean = false,
 ) {
     companion object {
         fun initial(): PanicPersistentState = PanicPersistentState()
+
+        fun localPendingWithoutRemoteProof(
+            panicIdHex: String,
+            configuration: RemoteDeleteConfiguration = RemoteDeleteConfiguration.UNKNOWN,
+        ): PanicPersistentState =
+            PanicPersistentState(
+                phase = PanicPhase.LOCAL_PENDING,
+                panicIdHex = panicIdHex,
+                remoteDeleteConfiguration = configuration,
+                remoteDeleteCheckpoint = RemoteDeleteCheckpoint.LEGACY_UNPROVEN,
+                legacyRemoteUnproven = true,
+            )
     }
 
     /** A valid standalone record must also be a legal successor of the stored record. */
     fun validateTransitionFrom(previous: PanicPersistentState) {
         validate()
         previous.validate()
+
         when (previous.phase) {
-            PanicPhase.IDLE -> require(phase == PanicPhase.IDLE || phase == PanicPhase.LOCAL_PENDING)
-            PanicPhase.LOCAL_PENDING -> require(phase == PanicPhase.LOCAL_PENDING || phase == PanicPhase.POST_PENDING)
-            PanicPhase.POST_PENDING -> require(phase == PanicPhase.POST_PENDING || phase == PanicPhase.COMPLETE)
-            PanicPhase.COMPLETE -> require(this == previous)
+            PanicPhase.IDLE ->
+                require(phase == PanicPhase.IDLE || phase == PanicPhase.LOCAL_PENDING)
+            PanicPhase.LOCAL_PENDING ->
+                require(phase == PanicPhase.LOCAL_PENDING || phase == PanicPhase.POST_PENDING)
+            PanicPhase.POST_PENDING ->
+                require(phase == PanicPhase.POST_PENDING || phase == PanicPhase.COMPLETE)
+            PanicPhase.COMPLETE,
+            PanicPhase.LEGACY_COMPLETE_UNVERIFIED ->
+                require(this == previous)
         }
+
         if (previous.phase != PanicPhase.IDLE) {
             require(panicIdHex == previous.panicIdHex)
             require(!previous.purgeComplete || purgeComplete)
             require(!previous.sessionRevocationComplete || sessionRevocationComplete)
-            require(!previous.remoteDeleteComplete || remoteDeleteComplete)
+            require(remoteDeleteConfiguration == previous.remoteDeleteConfiguration)
+            require(remoteDeleteIntent == previous.remoteDeleteIntent)
+            require(legacyRemoteUnproven == previous.legacyRemoteUnproven)
+            require(legacyRemoteDeleteComplete == previous.legacyRemoteDeleteComplete)
+            require(remoteCheckpointCanFollow(previous.remoteDeleteCheckpoint, remoteDeleteCheckpoint))
         }
     }
 
-    override fun toString(): String = "PanicPersistentState(phase=$phase, [redacted])"
+    override fun toString(): String =
+        "PanicPersistentState(phase=" + phase + ", remote=" + remoteDeleteCheckpoint + ", [redacted])"
 
     fun validate() {
         when (phase) {
             PanicPhase.IDLE -> {
                 require(panicIdHex == null)
-                require(!purgeComplete && !sessionRevocationComplete && !remoteDeleteComplete)
+                require(!purgeComplete && !sessionRevocationComplete)
+                require(remoteDeleteCheckpoint == null)
+                require(remoteDeleteIntent == null)
+                require(!legacyRemoteUnproven)
+                require(!legacyRemoteDeleteComplete)
             }
+
             PanicPhase.LOCAL_PENDING -> {
                 require(arm == null)
                 require(RemotePanicCommand.isLowerHex256(panicIdHex))
-                require(!purgeComplete && !sessionRevocationComplete && !remoteDeleteComplete)
+                require(!purgeComplete && !sessionRevocationComplete)
+                validateEngagedRemoteState()
             }
+
             PanicPhase.POST_PENDING -> {
                 require(arm == null)
                 require(RemotePanicCommand.isLowerHex256(panicIdHex))
+                validateEngagedRemoteState()
             }
+
             PanicPhase.COMPLETE -> {
                 require(arm == null)
                 require(RemotePanicCommand.isLowerHex256(panicIdHex))
-                require(purgeComplete && sessionRevocationComplete && remoteDeleteComplete)
+                require(purgeComplete && sessionRevocationComplete)
+                validateEngagedRemoteState()
+                require(
+                    remoteDeleteCheckpoint == RemoteDeleteCheckpoint.NOT_CONFIGURED ||
+                        remoteDeleteCheckpoint == RemoteDeleteCheckpoint.COMPLETE
+                )
+            }
+
+            PanicPhase.LEGACY_COMPLETE_UNVERIFIED -> {
+                require(arm == null)
+                require(RemotePanicCommand.isLowerHex256(panicIdHex))
+                require(purgeComplete && sessionRevocationComplete)
+                require(remoteDeleteConfiguration == RemoteDeleteConfiguration.UNKNOWN)
+                require(remoteDeleteCheckpoint == RemoteDeleteCheckpoint.LEGACY_UNPROVEN)
+                require(remoteDeleteIntent == null)
+                require(legacyRemoteUnproven)
+                require(legacyRemoteDeleteComplete)
             }
         }
 
@@ -107,4 +208,62 @@ data class PanicPersistentState(
             require(armed.contacts.all { RemotePanicCommand.isLowerHex256(it.verifierHex) })
         }
     }
+
+    fun remoteDeleteAllowsV2Completion(): Boolean =
+        remoteDeleteCheckpoint == RemoteDeleteCheckpoint.NOT_CONFIGURED ||
+            remoteDeleteCheckpoint == RemoteDeleteCheckpoint.COMPLETE
+
+    private fun validateEngagedRemoteState() {
+        when (remoteDeleteCheckpoint) {
+            RemoteDeleteCheckpoint.NOT_CONFIGURED -> {
+                require(remoteDeleteConfiguration == RemoteDeleteConfiguration.NOT_CONFIGURED)
+                require(remoteDeleteIntent == null)
+                require(!legacyRemoteUnproven)
+                require(!legacyRemoteDeleteComplete)
+            }
+
+            RemoteDeleteCheckpoint.PENDING,
+            RemoteDeleteCheckpoint.TOMBSTONED_PENDING,
+            RemoteDeleteCheckpoint.BLOCKED_AUTH,
+            RemoteDeleteCheckpoint.COMPLETE -> {
+                require(remoteDeleteConfiguration == RemoteDeleteConfiguration.CONFIGURED)
+                require(remoteDeleteIntent != null)
+                require(!legacyRemoteUnproven)
+                require(!legacyRemoteDeleteComplete)
+            }
+
+            RemoteDeleteCheckpoint.LEGACY_UNPROVEN -> {
+                require(remoteDeleteConfiguration != RemoteDeleteConfiguration.NOT_CONFIGURED)
+                require(remoteDeleteIntent == null)
+                require(legacyRemoteUnproven)
+            }
+
+            null -> error("Remote delete checkpoint required after panic admission")
+        }
+    }
+
+    private fun remoteCheckpointCanFollow(
+        previous: RemoteDeleteCheckpoint?,
+        next: RemoteDeleteCheckpoint?,
+    ): Boolean =
+        when (previous) {
+            null -> next == null
+            RemoteDeleteCheckpoint.NOT_CONFIGURED ->
+                next == RemoteDeleteCheckpoint.NOT_CONFIGURED
+            RemoteDeleteCheckpoint.PENDING ->
+                next == RemoteDeleteCheckpoint.PENDING ||
+                    next == RemoteDeleteCheckpoint.TOMBSTONED_PENDING ||
+                    next == RemoteDeleteCheckpoint.BLOCKED_AUTH ||
+                    next == RemoteDeleteCheckpoint.COMPLETE
+            RemoteDeleteCheckpoint.TOMBSTONED_PENDING ->
+                next == RemoteDeleteCheckpoint.TOMBSTONED_PENDING ||
+                    next == RemoteDeleteCheckpoint.BLOCKED_AUTH ||
+                    next == RemoteDeleteCheckpoint.COMPLETE
+            RemoteDeleteCheckpoint.BLOCKED_AUTH ->
+                next == RemoteDeleteCheckpoint.BLOCKED_AUTH
+            RemoteDeleteCheckpoint.COMPLETE ->
+                next == RemoteDeleteCheckpoint.COMPLETE
+            RemoteDeleteCheckpoint.LEGACY_UNPROVEN ->
+                next == RemoteDeleteCheckpoint.LEGACY_UNPROVEN
+        }
 }

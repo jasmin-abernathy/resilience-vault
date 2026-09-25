@@ -8,12 +8,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PanicEffectFailureTest {
-    private fun store() = InMemoryPanicStateStore(PanicPersistentState(
-        phase = PanicPhase.LOCAL_PENDING, panicIdHex = "a".repeat(64)
-    ))
+    private fun store() = InMemoryPanicStateStore(
+        PanicPersistentState.localPendingWithoutRemoteProof("a".repeat(64))
+    )
 
     @Test
-    fun purge_exception_and_revoke_timeout_do_not_block_delete() = runTest {
+    fun legacy_unproven_remote_never_uses_generic_delete_effect() = runTest {
         val state = store()
         var deletes = 0
         val post = object : PostDestructionPanicEffects {
@@ -26,7 +26,8 @@ class PanicEffectFailureTest {
         val result = coordinator.resumePostDestruction() as PostRecoveryResult.Progress
         assertEquals(PanicEffectResult.RETRYABLE_FAILURE, result.report.purge)
         assertEquals(PanicEffectResult.RETRYABLE_FAILURE, result.report.sessionRevocation)
-        assertEquals(1, deletes)
+        assertEquals(0, deletes)
+        assertEquals(PanicEffectResult.NOT_ATTEMPTED, result.report.remoteDelete)
         assertEquals(PanicPhase.POST_PENDING, result.report.phase)
     }
 
