@@ -1,9 +1,11 @@
 package org.lepotager.resiliencevault.panic
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -36,6 +38,7 @@ class VaultCryptoRuntimeTest {
         assertTrue(runtime.useSession(VaultAccessOperation.RESTORE,
             { error("must not open") }) { Unit } is VaultLeaseExecution.Blocked)
     }
+
     @Test fun keyDeletionExceptionNeverMeansSuccess() = runTest {
         val runtime = VaultCryptoRuntime(VaultAccessLeaseManager(InMemoryPanicStateStore()),
             { throw java.io.IOException("Keystore unavailable") }, { error("must not continue") })
@@ -44,6 +47,7 @@ class VaultCryptoRuntimeTest {
         try { runtime.destroyLocalReadCapability() } catch (_: java.io.IOException) { failed = true }
         assertTrue(failed)
     }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun canceledDrainCannotAuthorizeDestructionAndQueuedMutationNeverStarts() = runTest {
         var destroyed = false
@@ -78,4 +82,68 @@ class VaultCryptoRuntimeTest {
         assertTrue(destroyed); assertFalse(queuedOpened)
     }
 
+    @Test fun panicDuringSuspendedOpenCancelsBeforeSessionPublication() = runTest {
+        var destroyed = false
+        val runtime = VaultCryptoRuntime(
+            VaultAccessLeaseManager(InMemoryPanicStateStore()),
+            { destroyed = true },
+            {},
+        )
+        val promptEntered = CompletableDeferred<Unit>()
+        var blockEntered = false
+        val active = async {
+            runtime.useSession(
+                VaultAccessOperation.READ,
+                open = {
+                    promptEntered.complete(Unit)
+                    awaitCancellation()
+                },
+            ) {
+                blockEntered = true
+                Unit
+            }
+        }
+
+        promptEntered.await()
+        assertEquals(PanicEffectResult.COMPLETED, runtime.invalidateInFlightAccess())
+        active.join()
+
+        assertTrue(active.isCancelled)
+        assertFalse(blockEntered)
+        assertEquals(PanicEffectResult.COMPLETED, runtime.destroyLocalReadCapability())
+        assertTrue(destroyed)
+    }
+
+    @Test fun cancellationAfterOpenClosesUnpublishedSession() = runTest {
+        val runtime = VaultCryptoRuntime(
+            VaultAccessLeaseManager(InMemoryPanicStateStore()),
+            {},
+            {},
+        )
+        val opened = CompletableDeferred<TinkVaultSession>()
+        var blockEntered = false
+
+        val active = async {
+            runtime.useSession(
+                VaultAccessOperation.READ,
+                open = {
+                    val session =
+                        TinkVaultSession.create("11".repeat(32), "22".repeat(32), 1)
+                    opened.complete(session)
+                    checkNotNull(currentCoroutineContext()[Job]).cancel()
+                    session
+                },
+            ) {
+                blockEntered = true
+                Unit
+            }
+        }
+
+        val session = opened.await()
+        active.join()
+
+        assertTrue(active.isCancelled)
+        assertFalse(blockEntered)
+        assertThrows(Exception::class.java) { session.checkLive() }
+    }
 }

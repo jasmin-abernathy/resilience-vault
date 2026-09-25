@@ -2,6 +2,7 @@ package org.lepotager.resiliencevault.crypto
 
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.aead.PredefinedAeadParameters
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -26,20 +27,29 @@ class TinkVaultSessionTest {
             }
         }
     }
-    @Test fun localEnvelopeRequiresKekAndExpectedEpoch() {
+    @Test fun localEnvelopeRequiresKekAndExpectedEpoch() = runTest {
         session().use { vault ->
             val kek = KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM).aead()
-            val wrapped = vault.wrapLocal(kek)
-            TinkVaultSession.openLocal(vault.vaultId, vault.generation, 1, wrapped, kek).use { reopened ->
+            val localKek = TestLocalKekEnvelope(kek)
+            val wrapped = vault.wrapLocal(localKek)
+            TinkVaultSession.openLocal(vault.vaultId, vault.generation, 1, wrapped, localKek).use { reopened ->
                 val context = vault.context(VaultBinding.Purpose.MANIFEST, "44".repeat(32), 1)
                 val sealed = vault.sealManifest(context, byteArrayOf(1, 2, 3))
                 assertArrayEquals(byteArrayOf(1, 2, 3), reopened.openManifest(context, sealed))
             }
-            assertThrows(Exception::class.java) { TinkVaultSession.openLocal(vault.vaultId, vault.generation, 2, wrapped, kek) }
-            assertThrows(Exception::class.java) { TinkVaultSession.openLocal(vault.vaultId, vault.generation, 1, wrapped,
-                KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM).aead()) }
+            assertSuspendFails {
+                TinkVaultSession.openLocal(vault.vaultId, vault.generation, 2, wrapped, localKek)
+            }
+            val wrong = TestLocalKekEnvelope(
+                KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM).aead()
+            )
+            assertSuspendFails {
+                TinkVaultSession.openLocal(vault.vaultId, vault.generation, 1, wrapped, wrong)
+            }
             val corrupt = wrapped.copyOf().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
-            assertThrows(Exception::class.java) { TinkVaultSession.openLocal(vault.vaultId, vault.generation, 1, corrupt, kek) }
+            assertSuspendFails {
+                TinkVaultSession.openLocal(vault.vaultId, vault.generation, 1, corrupt, localKek)
+            }
         }
     }
     @Test fun invalidatedHandleCannotReopenOrGenerateObjects() {

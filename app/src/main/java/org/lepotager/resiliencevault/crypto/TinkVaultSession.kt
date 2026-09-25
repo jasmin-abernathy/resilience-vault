@@ -17,6 +17,8 @@ import java.io.DataOutputStream
 import java.security.GeneralSecurityException
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /** Internal integration core, deliberately not reachable from the production UI. */
 internal class TinkVaultSession private constructor(
@@ -48,7 +50,15 @@ internal class TinkVaultSession private constructor(
         checkLive()
     }
 
-    fun wrapLocal(kek: Aead): ByteArray = wrapEpoch(kek, context(VaultBinding.Purpose.EPOCH_LOCAL).associatedData())
+    suspend fun wrapLocal(kek: LocalKekEnvelope): ByteArray {
+        currentCoroutineContext().ensureActive()
+        val aad = context(VaultBinding.Purpose.EPOCH_LOCAL).associatedData()
+        val sealed = kek.encryptKeyset(epochKey(), aad)
+        currentCoroutineContext().ensureActive()
+        check(sealed.size <= MAX_KEYSET_BYTES)
+        checkLive()
+        return aad + sealed
+    }
 
     internal fun wrapRecovery(recovery: KeysetHandle, head: String): ByteArray =
         wrapEpoch(recovery.aead(), recoveryAad(vaultId, generation, epoch, head))
@@ -156,9 +166,29 @@ internal class TinkVaultSession private constructor(
                 KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM))
         }
 
-        fun openLocal(vaultId: String, generation: String, epoch: Long, envelope: ByteArray, kek: Aead): TinkVaultSession {
-            val aad = VaultBinding(VaultBinding.Purpose.EPOCH_LOCAL, vaultId, generation, ZERO_ID, epoch, 0).associatedData()
-            return openEpoch(vaultId, generation, epoch, envelope, kek, aad)
+        suspend fun openLocal(
+            vaultId: String,
+            generation: String,
+            epoch: Long,
+            envelope: ByteArray,
+            kek: LocalKekEnvelope,
+        ): TinkVaultSession {
+            register()
+            currentCoroutineContext().ensureActive()
+            val aad = VaultBinding(
+                VaultBinding.Purpose.EPOCH_LOCAL,
+                vaultId,
+                generation,
+                ZERO_ID,
+                epoch,
+                0,
+            ).associatedData()
+            require(envelope.size in (aad.size + 1)..(aad.size + MAX_KEYSET_BYTES))
+            require(MessageDigest.isEqual(envelope.copyOfRange(0, aad.size), aad))
+            val handle = kek.decryptKeyset(envelope.copyOfRange(aad.size, envelope.size), aad)
+            currentCoroutineContext().ensureActive()
+            requireKeyType(handle, streaming = false)
+            return TinkVaultSession(vaultId, generation, epoch, handle)
         }
 
         internal fun openRecovery(vaultId: String, generation: String, epoch: Long, head: String,
