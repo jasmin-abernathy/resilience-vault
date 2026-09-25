@@ -33,8 +33,11 @@ import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
 import org.lepotager.resiliencevault.BuildConfig
+import org.lepotager.resiliencevault.panic.AndroidFirstInstallPanicCeremony
 import org.lepotager.resiliencevault.panic.AndroidPanicClock
 import org.lepotager.resiliencevault.panic.AtomicFilePanicStateStore
+import org.lepotager.resiliencevault.panic.FirstInstallPanicCeremonyResult
+import org.lepotager.resiliencevault.panic.FirstInstallSecurityEvidence
 import org.lepotager.resiliencevault.panic.PanicAdmissionService
 import org.lepotager.resiliencevault.panic.PanicPhase
 import org.lepotager.resiliencevault.panic.PanicStoreReadResult
@@ -131,6 +134,9 @@ private fun RemotePanicPreparationCard() {
     val panicClock = remember(context) { AndroidPanicClock(context.contentResolver) }
     val store = remember(context) { AtomicFilePanicStateStore.create(context.applicationContext) }
     val admission = remember(store) { PanicAdmissionService(store) }
+    val firstInstall = remember(context) {
+        AndroidFirstInstallPanicCeremony.create(context.applicationContext)
+    }
 
     var persistentState by remember { mutableStateOf<PanicStoreReadResult?>(null) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
@@ -197,6 +203,12 @@ private fun RemotePanicPreparationCard() {
                             is PanicTransactionResult.Unavailable ->
                                 "État de sécurité indisponible : ${result.failure}."
                         }
+                        persistentState = admission.refreshRemoteState()
+                    }
+                },
+                onInitializeFirstInstall = {
+                    scope.launch {
+                        actionMessage = firstInstallMessage(firstInstall.initialize())
                         persistentState = admission.refreshRemoteState()
                     }
                 }
@@ -320,16 +332,31 @@ private fun PersistentRemotePanicStatus(
     readResult: PanicStoreReadResult?,
     panicClock: AndroidPanicClock,
     onRemoveContact: (String) -> Unit,
-    onDisarm: () -> Unit
+    onDisarm: () -> Unit,
+    onInitializeFirstInstall: () -> Unit
 ) {
     when (readResult) {
         null -> Text("Vérification du registre de sécurité…")
-        is PanicStoreReadResult.Unavailable -> Text(
-            if (readResult.failure.name == "MISSING")
-                "Registre de sécurité non initialisé : mode distant bloqué par défaut."
-            else
-                "Registre de sécurité indisponible (${readResult.failure}) : mode distant bloqué."
-        )
+        is PanicStoreReadResult.Unavailable -> {
+            if (readResult.failure.name == "MISSING") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Registre de sécurité non initialisé : accès au coffre bloqué par défaut.")
+                    Text(
+                        "Uniquement pour une installation réellement neuve : la vérification " +
+                            "refusera l’initialisation si une donnée locale de sécurité ou une " +
+                            "clé du coffre existe déjà.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = onInitializeFirstInstall) {
+                        Text("Initialiser cette nouvelle installation")
+                    }
+                }
+            } else {
+                Text(
+                    "Registre de sécurité indisponible (${readResult.failure}) : accès au coffre bloqué."
+                )
+            }
+        }
         is PanicStoreReadResult.Ready -> {
             val state = readResult.state
             if (state.phase != PanicPhase.IDLE) {
@@ -376,6 +403,27 @@ private fun PersistentRemotePanicStatus(
         }
     }
 }
+
+private fun firstInstallMessage(result: FirstInstallPanicCeremonyResult): String =
+    when (result) {
+        FirstInstallPanicCeremonyResult.Created ->
+            "Registre de sécurité initialisé pour cette nouvelle installation."
+        FirstInstallPanicCeremonyResult.AlreadyInitialized ->
+            "Le registre de sécurité est déjà initialisé."
+        is FirstInstallPanicCeremonyResult.StoreUnavailable ->
+            "Initialisation refusée : registre indisponible (${result.failure})."
+        is FirstInstallPanicCeremonyResult.Refused ->
+            when (result.evidence) {
+                FirstInstallSecurityEvidence.FILES_PRESENT ->
+                    "Initialisation refusée : des données locales existent déjà."
+                FirstInstallSecurityEvidence.LOCAL_KEK_PRESENT ->
+                    "Initialisation refusée : une clé locale du coffre existe déjà."
+                FirstInstallSecurityEvidence.UNAVAILABLE ->
+                    "Impossible de prouver que l’installation est neuve : état laissé bloqué."
+                FirstInstallSecurityEvidence.PRISTINE ->
+                    "Initialisation refusée par précaution."
+            }
+    }
 
 private fun normalizationMessage(result: PhoneNumberNormalization): String =
     when ((result as? PhoneNumberNormalization.Invalid)?.reason) {
