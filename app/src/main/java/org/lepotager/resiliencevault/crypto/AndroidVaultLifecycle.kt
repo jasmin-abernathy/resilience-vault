@@ -34,11 +34,6 @@ internal class AndroidVaultLifecycle private constructor(
     )
     val panicEffects: LocalCriticalPanicEffects get() = runtime
 
-    /** Explicit first-install ceremony. Call only from a product flow that has established
-     * this is a new installation. Existing/corrupt/unreadable state is never reset.
-     */
-    suspend fun initializeFirstInstallPanicState() = panicStore.initializeFresh()
-
     suspend fun createExplicit(identity: VaultProvisioningJournal, prompt: AuthenticatedCipherPrompt): VaultLeaseExecution<Unit> =
         runtime.useSession(VaultAccessOperation.RESTORE, {
             check(AndroidVaultRotationEffects(context, identity, prompt).state() == null)

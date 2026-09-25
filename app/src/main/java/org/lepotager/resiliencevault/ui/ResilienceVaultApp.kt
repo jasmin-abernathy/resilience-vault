@@ -33,6 +33,8 @@ import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
 import org.lepotager.resiliencevault.BuildConfig
+import org.lepotager.resiliencevault.crypto.AndroidFirstInstallSecurityCeremony
+import org.lepotager.resiliencevault.crypto.FirstInstallSecurityStatus
 import org.lepotager.resiliencevault.panic.AndroidPanicClock
 import org.lepotager.resiliencevault.panic.AtomicFilePanicStateStore
 import org.lepotager.resiliencevault.panic.PanicAdmissionService
@@ -52,6 +54,7 @@ fun ResilienceVaultApp(settings: VaultSettings) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snapshot by settings.snapshot.collectAsState(initial = null)
+    var securityRefreshToken by remember { mutableStateOf(0) }
 
     val signalPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -110,7 +113,11 @@ fun ResilienceVaultApp(settings: VaultSettings) {
                 }
             }
 
-            RemotePanicPreparationCard()
+            FirstInstallSecurityCard {
+                securityRefreshToken += 1
+            }
+
+            RemotePanicPreparationCard(securityRefreshToken)
 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -124,7 +131,87 @@ fun ResilienceVaultApp(settings: VaultSettings) {
 }
 
 @Composable
-private fun RemotePanicPreparationCard() {
+private fun FirstInstallSecurityCard(onSecurityChanged: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val ceremony = remember(context) {
+        AndroidFirstInstallSecurityCeremony.create(context.applicationContext)
+    }
+    var status by remember { mutableStateOf<FirstInstallSecurityStatus?>(null) }
+
+    fun refresh() {
+        scope.launch { status = ceremony.status() }
+    }
+
+    fun initialize() {
+        scope.launch {
+            val next = ceremony.initialize()
+            status = next
+            if (next == FirstInstallSecurityStatus.Ready) {
+                onSecurityChanged()
+            }
+        }
+    }
+
+    LaunchedEffect(ceremony) {
+        status = ceremony.status()
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Sécurité locale", style = MaterialTheme.typography.titleMedium)
+            when (val current = status) {
+                null -> Text("Vérification de l’installation…")
+                FirstInstallSecurityStatus.Ready ->
+                    Text("Registre de sécurité initialisé et protégé contre une réinitialisation silencieuse.")
+                FirstInstallSecurityStatus.Eligible -> {
+                    Text(
+                        "Installation locale vierge détectée. L’initialisation reste explicite et ne sera jamais déduite du seul fait qu’un fichier manque."
+                    )
+                    Button(
+                        onClick = ::initialize
+                    ) { Text("Initialiser la sécurité locale") }
+                }
+                FirstInstallSecurityStatus.Interrupted -> {
+                    Text("Une initialisation explicite a été interrompue. Elle peut être reprise sans recréer un état existant.")
+                    Button(
+                        onClick = ::initialize
+                    ) { Text("Reprendre l’initialisation") }
+                }
+                FirstInstallSecurityStatus.NeedsMarkerSeal -> {
+                    Text("Un registre valide antérieur existe. Il peut être marqué comme installation existante sans être réinitialisé.")
+                    Button(
+                        onClick = ::initialize
+                    ) { Text("Finaliser la protection") }
+                }
+                is FirstInstallSecurityStatus.Blocked -> {
+                    Text(firstInstallBlockedMessage(current.reason))
+                    OutlinedButton(onClick = ::refresh) { Text("Revérifier") }
+                }
+            }
+        }
+    }
+}
+
+private fun firstInstallBlockedMessage(
+    reason: FirstInstallSecurityStatus.Reason
+): String = when (reason) {
+    FirstInstallSecurityStatus.Reason.MARKER_UNAVAILABLE ->
+        "Marqueur d’installation indisponible ou corrompu : initialisation bloquée."
+    FirstInstallSecurityStatus.Reason.PANIC_UNAVAILABLE ->
+        "Registre de sécurité indisponible ou incohérent : initialisation bloquée."
+    FirstInstallSecurityStatus.Reason.SECURITY_FOOTPRINT_PRESENT ->
+        "Des traces de sécurité d’une installation antérieure existent : aucune réinitialisation automatique n’est autorisée."
+    FirstInstallSecurityStatus.Reason.SECURITY_FOOTPRINT_UNAVAILABLE ->
+        "Impossible de vérifier l’absence d’un état antérieur : initialisation bloquée."
+    FirstInstallSecurityStatus.Reason.PANIC_CHANGED_DURING_CEREMONY ->
+        "Le registre a changé pendant l’initialisation : reprise refusée."
+    FirstInstallSecurityStatus.Reason.INITIALIZATION_FAILED ->
+        "L’initialisation n’a pas pu être vérifiée durablement : accès bloqué."
+}
+
+@Composable
+private fun RemotePanicPreparationCard(securityRefreshToken: Int) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val normalizer = remember { PlatformPhoneNumberNormalizer() }
@@ -142,7 +229,7 @@ private fun RemotePanicPreparationCard() {
         scope.launch { persistentState = admission.refreshRemoteState() }
     }
 
-    LaunchedEffect(store) {
+    LaunchedEffect(store, securityRefreshToken) {
         persistentState = admission.refreshRemoteState()
     }
 
