@@ -25,13 +25,19 @@ internal class AndroidVaultLifecycle private constructor(
             } ?: AndroidVaultLifecycle(app, removeReadCredentials).also { instances[path] = it }
         }
     }
+    private val panicStore = AtomicFilePanicStateStore.create(context)
     private val key = AndroidVaultKek(context)
     private val runtime = VaultCryptoRuntime(
-        VaultAccessLeaseManagers.forStore(AtomicFilePanicStateStore.create(context)),
+        VaultAccessLeaseManagers.forStore(panicStore),
         { VaultAliasDestruction(key::aliases, key::deleteAlias, key::aliasExists).destroyAll() },
         removeReadCredentials,
     )
     val panicEffects: LocalCriticalPanicEffects get() = runtime
+
+    /** Explicit first-install ceremony. Call only from a product flow that has established
+     * this is a new installation. Existing/corrupt/unreadable state is never reset.
+     */
+    suspend fun initializeFirstInstallPanicState() = panicStore.initializeFresh()
 
     suspend fun createExplicit(identity: VaultProvisioningJournal, auth: PerUseCipherAuthorization): VaultLeaseExecution<Unit> =
         runtime.useSession(VaultAccessOperation.RESTORE, {
