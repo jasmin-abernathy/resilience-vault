@@ -60,7 +60,9 @@ class PanicRecoveryCoordinator(
 
         when (state.phase) {
             PanicPhase.IDLE -> return LocalRecoveryResult.NoPanic
-            PanicPhase.POST_PENDING, PanicPhase.COMPLETE ->
+            PanicPhase.POST_PENDING,
+            PanicPhase.COMPLETE,
+            PanicPhase.LEGACY_COMPLETE_UNVERIFIED ->
                 return LocalRecoveryResult.AlreadyPastLocalPhase
             PanicPhase.LOCAL_PENDING -> Unit
         }
@@ -111,9 +113,10 @@ class PanicRecoveryCoordinator(
         when (state.phase) {
             PanicPhase.IDLE -> return PostRecoveryResult.NoPanic
             PanicPhase.LOCAL_PENDING -> return PostRecoveryResult.LocalPhaseStillPending
-            PanicPhase.COMPLETE ->
+            PanicPhase.COMPLETE,
+            PanicPhase.LEGACY_COMPLETE_UNVERIFIED ->
                 return PostRecoveryResult.Progress(
-                    PostRecoveryReport(PanicPhase.COMPLETE, null, null, null)
+                    PostRecoveryReport(state.phase, null, null, null)
                 )
             PanicPhase.POST_PENDING -> Unit
         }
@@ -138,21 +141,24 @@ class PanicRecoveryCoordinator(
             }
         }
 
-        if (!state.remoteDeleteComplete) {
-            remoteResult = attemptEffect(10_000L) { postEffects.deleteRemoteVault() }
-            if (remoteResult == PanicEffectResult.COMPLETED) {
-                state = checkpointPostTask(state, PostTask.REMOTE_DELETE)
-                    ?: return PostRecoveryResult.StorageUnavailable(PanicStoreFailure.COMMIT_FAILED)
-            }
+        // DELETE-only is deliberately not invoked by the V2 model/codec lot.
+        // PENDING/TOMBSTONED/BLOCKED/LEGACY states remain durable and incomplete until
+        // the dedicated intent-bound RemoteDeleteAttempt adapter is wired in the next lot.
+        if (!state.remoteDeleteAllowsV2Completion()) {
+            remoteResult = PanicEffectResult.NOT_ATTEMPTED
         }
 
-        if (state.purgeComplete && state.sessionRevocationComplete && state.remoteDeleteComplete) {
+        if (
+            state.purgeComplete &&
+                state.sessionRevocationComplete &&
+                state.remoteDeleteAllowsV2Completion()
+        ) {
             when (val complete = store.transaction { latest ->
                 if (latest.phase == PanicPhase.POST_PENDING &&
                     latest.panicIdHex == state.panicIdHex &&
                     latest.purgeComplete &&
                     latest.sessionRevocationComplete &&
-                    latest.remoteDeleteComplete
+                    latest.remoteDeleteAllowsV2Completion()
                 ) {
                     PanicStateMutation.Replace(latest.copy(phase = PanicPhase.COMPLETE), true)
                 } else {
@@ -194,8 +200,7 @@ class PanicRecoveryCoordinator(
 
     private enum class PostTask {
         PURGE,
-        REVOKE,
-        REMOTE_DELETE
+        REVOKE
     }
 
     private suspend fun checkpointPostTask(
@@ -211,7 +216,6 @@ class PanicRecoveryCoordinator(
                 val next = when (task) {
                     PostTask.PURGE -> latest.copy(purgeComplete = true)
                     PostTask.REVOKE -> latest.copy(sessionRevocationComplete = true)
-                    PostTask.REMOTE_DELETE -> latest.copy(remoteDeleteComplete = true)
                 }
                 PanicStateMutation.Replace(next, true)
             }

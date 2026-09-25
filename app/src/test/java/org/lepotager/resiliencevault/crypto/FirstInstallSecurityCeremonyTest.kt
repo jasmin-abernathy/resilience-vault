@@ -143,9 +143,8 @@ class FirstInstallSecurityCeremonyTest {
 
     @Test
     fun interruptedCeremonyRefusesAChangedPanicState() = runTest {
-        val changed = PanicPersistentState(
-            phase = PanicPhase.LOCAL_PENDING,
-            panicIdHex = "11".repeat(32),
+        val changed = PanicPersistentState.localPendingWithoutRemoteProof(
+            "11".repeat(32)
         )
         val marker = Marker(
             FirstInstallMarkerRead.Ready(FirstInstallMarkerPhase.BEGIN)

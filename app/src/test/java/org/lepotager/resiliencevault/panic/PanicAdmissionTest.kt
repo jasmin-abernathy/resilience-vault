@@ -32,7 +32,7 @@ class PanicAdmissionTest {
 
     @Test
     fun generated_commands_are_distinct_and_secrets_are_not_persisted() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
         val result = service.armRemote(request(contacts.take(5))) as RemoteArmResult.Armed
 
@@ -47,7 +47,7 @@ class PanicAdmissionTest {
 
     @Test
     fun valid_contact_consumes_entire_window_and_cross_contact_secret_fails() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
         val armed = service.armRemote(request(contacts.take(5))) as RemoteArmResult.Armed
 
@@ -76,7 +76,7 @@ class PanicAdmissionTest {
     fun exact_expiry_boot_and_clock_drift_fail_closed() = runTest {
         suspend fun attempt(clock: PanicClockSnapshot): AdmissionResult {
             observation = PanicAdmissionObservation(now, true)
-            val store = InMemoryPanicStateStore()
+            val store = knownNoCloudStore()
             val service = service(store)
             val armed = service.armRemote(request(listOf(contacts[0]))) as RemoteArmResult.Armed
             return service.acceptSms(envelope(contacts[0], armed.commands.single().command, clock))
@@ -112,7 +112,7 @@ class PanicAdmissionTest {
 
     @Test
     fun revoked_permission_disarms_and_untrusted_envelope_does_not_trigger() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
         val armed = service.armRemote(request(listOf(contacts[0]))) as RemoteArmResult.Armed
 
@@ -138,7 +138,7 @@ class PanicAdmissionTest {
 
     @Test
     fun remove_contact_is_immediate_and_last_contact_disarms() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
         service.armRemote(request(contacts.take(2)))
 
@@ -153,7 +153,7 @@ class PanicAdmissionTest {
 
     @Test
     fun local_panic_uses_same_persistent_intention_and_invalidates_remote_window() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
         service.armRemote(request(contacts.take(5)))
 
@@ -165,8 +165,26 @@ class PanicAdmissionTest {
     }
 
     @Test
-    fun commit_failure_never_reports_acceptance() = runTest {
+    fun unknown_remote_configuration_blocks_sms_arming_but_not_local_emergency() = runTest {
         val store = InMemoryPanicStateStore()
+        val service = service(store)
+
+        val armResult = service.armRemote(request(listOf(contacts[0])))
+        assertEquals(
+            ArmRejectionReason.REMOTE_DELETE_PROOF_REQUIRED,
+            (armResult as RemoteArmResult.Rejected).reason,
+        )
+
+        assertTrue(service.acceptLocal() is AdmissionResult.Accepted)
+        val state = (store.read() as PanicStoreReadResult.Ready).state
+        assertEquals(PanicPhase.LOCAL_PENDING, state.phase)
+        assertEquals(RemoteDeleteCheckpoint.LEGACY_UNPROVEN, state.remoteDeleteCheckpoint)
+        assertTrue(state.legacyRemoteUnproven)
+    }
+
+    @Test
+    fun commit_failure_never_reports_acceptance() = runTest {
+        val store = knownNoCloudStore()
         val service = service(store)
         val armed = service.armRemote(request(listOf(contacts[0]))) as RemoteArmResult.Armed
 
@@ -181,7 +199,7 @@ class PanicAdmissionTest {
 
     @Test
     fun simultaneous_valid_contacts_have_exactly_one_winner() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
         val armed = service.armRemote(request(contacts.take(2))) as RemoteArmResult.Armed
 
@@ -204,12 +222,19 @@ class PanicAdmissionTest {
     }
 
     private fun service(
-        store: InMemoryPanicStateStore = InMemoryPanicStateStore()
+        store: InMemoryPanicStateStore = knownNoCloudStore()
     ): PanicAdmissionService =
         PanicAdmissionService(
             store = store,
             environment = PanicAdmissionEnvironment { observation },
             tokenGenerator = RemotePanicTokenGenerator(SecureRandom())
+        )
+
+    private fun knownNoCloudStore(): InMemoryPanicStateStore =
+        InMemoryPanicStateStore(
+            PanicPersistentState.initial().copy(
+                remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED
+            )
         )
 
     private fun request(

@@ -28,7 +28,8 @@ enum class ArmRejectionReason {
     INVALID_CLOCK,
     INVALID_DURATION,
     INVALID_CONTACTS,
-    ENTROPY_FAILURE
+    ENTROPY_FAILURE,
+    REMOTE_DELETE_PROOF_REQUIRED
 }
 
 data class ValidatedSmsEnvelope(
@@ -68,6 +69,11 @@ class PanicAdmissionService(
             if (state.phase != PanicPhase.IDLE) {
                 return@transaction PanicStateMutation.Keep(
                     RemoteArmResult.Rejected(ArmRejectionReason.PANIC_ACTIVE)
+                )
+            }
+            if (state.remoteDeleteConfiguration != RemoteDeleteConfiguration.NOT_CONFIGURED) {
+                return@transaction PanicStateMutation.Keep(
+                    RemoteArmResult.Rejected(ArmRejectionReason.REMOTE_DELETE_PROOF_REQUIRED)
                 )
             }
             // Observe after obtaining the store lock, never trust a caller's timestamp.
@@ -238,7 +244,10 @@ class PanicAdmissionService(
                     panicIdHex = panicId,
                     purgeComplete = false,
                     sessionRevocationComplete = false,
-                    remoteDeleteComplete = false
+                    remoteDeleteCheckpoint = RemoteDeleteCheckpoint.NOT_CONFIGURED,
+                    remoteDeleteIntent = null,
+                    legacyRemoteUnproven = false,
+                    legacyRemoteDeleteComplete = false
                 ),
                 value = AdmissionResult.Accepted(panicId)
             )
@@ -257,14 +266,7 @@ class PanicAdmissionService(
                 )
             } else {
                 PanicStateMutation.Replace(
-                    state = state.copy(
-                        phase = PanicPhase.LOCAL_PENDING,
-                        arm = null,
-                        panicIdHex = panicId,
-                        purgeComplete = false,
-                        sessionRevocationComplete = false,
-                        remoteDeleteComplete = false
-                    ),
+                    state = localPanicState(state, panicId),
                     value = AdmissionResult.Accepted(panicId)
                 )
             }
@@ -273,6 +275,36 @@ class PanicAdmissionService(
             is PanicTransactionResult.Unavailable -> AdmissionResult.StorageUnavailable(result.failure)
         }
     }
+
+    private fun localPanicState(
+        state: PanicPersistentState,
+        panicId: String,
+    ): PanicPersistentState =
+        if (state.remoteDeleteConfiguration == RemoteDeleteConfiguration.NOT_CONFIGURED) {
+            state.copy(
+                phase = PanicPhase.LOCAL_PENDING,
+                arm = null,
+                panicIdHex = panicId,
+                purgeComplete = false,
+                sessionRevocationComplete = false,
+                remoteDeleteCheckpoint = RemoteDeleteCheckpoint.NOT_CONFIGURED,
+                remoteDeleteIntent = null,
+                legacyRemoteUnproven = false,
+                legacyRemoteDeleteComplete = false,
+            )
+        } else {
+            state.copy(
+                phase = PanicPhase.LOCAL_PENDING,
+                arm = null,
+                panicIdHex = panicId,
+                purgeComplete = false,
+                sessionRevocationComplete = false,
+                remoteDeleteCheckpoint = RemoteDeleteCheckpoint.LEGACY_UNPROVEN,
+                remoteDeleteIntent = null,
+                legacyRemoteUnproven = true,
+                legacyRemoteDeleteComplete = false,
+            )
+        }
 
     private fun observeOrUnavailable(): PanicAdmissionObservation =
         try {
