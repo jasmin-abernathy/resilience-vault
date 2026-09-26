@@ -61,15 +61,21 @@ class ReferenceStore:
         *,
         now: Callable[[], int] | None = None,
         delete_operation_id_factory: Callable[[], str] | None = None,
+        fault_injector: Callable[[str], None] | None = None,
     ) -> None:
         self.database_path = Path(database_path)
         self.tombstone_ledger_path = Path(tombstone_ledger_path)
         self.now = now or (lambda: int(time.time()))
         self.delete_operation_id_factory = delete_operation_id_factory or (lambda: secrets.token_hex(16))
+        self.fault_injector = fault_injector
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.tombstone_ledger_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
         self.reconcile_tombstones()
+
+    def _fault(self, point: str) -> None:
+        if self.fault_injector is not None:
+            self.fault_injector(point)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -210,7 +216,9 @@ class ReferenceStore:
                         now,
                     ),
                 )
+                self._fault("provisioning.before_commit")
                 conn.commit()
+                self._fault("provisioning.after_commit")
                 return row, True
             except Exception:
                 conn.rollback()
@@ -346,17 +354,21 @@ class ReferenceStore:
                     ) VALUES(?,?,?,?,?,'PENDING',?,?)""",
                     (tenant_id, service_id, vault_id, generation, delete_operation_id, now, now),
                 )
+                self._fault("delete.after_tombstone")
                 conn.execute(
                     "UPDATE vault_generations SET tombstoned=1 WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
                     (tenant_id, service_id, vault_id, generation),
                 )
+                self._fault("delete.after_primary_mark")
                 conn.execute(
                     """INSERT INTO purge_outbox(
                         tenant_id,service_id,vault_id,generation,delete_operation_id,state
                     ) VALUES(?,?,?,?,?,'PENDING')""",
                     (tenant_id, service_id, vault_id, generation, delete_operation_id),
                 )
+                self._fault("delete.before_commit")
                 conn.commit()
+                self._fault("delete.after_commit")
                 return DeleteStatus(tenant_id, service_id, vault_id, generation, delete_operation_id, "PENDING")
             except Exception:
                 conn.rollback()
@@ -372,6 +384,11 @@ class ReferenceStore:
                 rows = conn.execute("SELECT * FROM purge_outbox WHERE state='PENDING' ORDER BY rowid").fetchall()
                 for row in rows:
                     key = (row["tenant_id"], row["service_id"], row["vault_id"], row["generation"])
+                    self._fault("purge.before_delete")
+                    conn.execute(
+                        "DELETE FROM staged_uploads WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
+                        key,
+                    )
                     limit = max_objects_per_generation
                     if limit is None:
                         conn.execute(
@@ -390,11 +407,16 @@ class ReferenceStore:
                             [(r["object_id"],) for r in object_rows],
                         )
 
-                    remaining = conn.execute(
+                    self._fault("purge.after_delete_before_complete")
+                    remaining_active = conn.execute(
                         "SELECT COUNT(*) AS n FROM active_objects WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
                         key,
                     ).fetchone()["n"]
-                    if remaining == 0:
+                    remaining_staged = conn.execute(
+                        "SELECT COUNT(*) AS n FROM staged_uploads WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
+                        key,
+                    ).fetchone()["n"]
+                    if remaining_active == 0 and remaining_staged == 0:
                         conn.execute(
                             "UPDATE purge_outbox SET state='COMPLETE' WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
                             key,
@@ -407,8 +429,10 @@ class ReferenceStore:
                         state = "COMPLETE"
                     else:
                         state = "PENDING"
+                    self._fault("purge.after_state_before_commit")
                     results.append(DeleteStatus(*key, row["delete_operation_id"], state))
                 conn.commit()
+                self._fault("purge.after_commit")
                 return results
             except Exception:
                 conn.rollback()
@@ -419,6 +443,7 @@ class ReferenceStore:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 self._reconcile_tombstones_in_transaction(conn)
+                self._fault("reconcile.before_commit")
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -464,6 +489,13 @@ class ReferenceStore:
                 (tenant_id, service_id, vault_id, generation),
             ).fetchone()["n"])
 
+    def staged_upload_count(self, *, tenant_id: str, service_id: str, vault_id: str, generation: str) -> int:
+        with closing(self._connect()) as conn:
+            return int(conn.execute(
+                "SELECT COUNT(*) AS n FROM staged_uploads WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
+                (tenant_id, service_id, vault_id, generation),
+            ).fetchone()["n"])
+
     def generation_tombstoned(self, *, tenant_id: str, service_id: str, vault_id: str, generation: str) -> bool:
         with closing(self._connect()) as conn:
             if self._ledger_tombstone(conn, tenant_id, service_id, vault_id, generation):
@@ -487,11 +519,15 @@ class ReferenceStore:
             "SELECT COUNT(*) AS n FROM active_objects WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
             key,
         ).fetchone()["n"]
+        staged_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM staged_uploads WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
+            key,
+        ).fetchone()["n"]
         outbox = conn.execute(
             "SELECT state FROM purge_outbox WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
             key,
         ).fetchone()
-        if active_count or outbox is None or outbox["state"] != "COMPLETE":
+        if active_count or staged_count or outbox is None or outbox["state"] != "COMPLETE":
             return "PENDING"
         return "COMPLETE"
 
@@ -529,7 +565,11 @@ class ReferenceStore:
                 "SELECT COUNT(*) AS n FROM active_objects WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
                 key,
             ).fetchone()["n"]
-            reconciled_state = "PENDING" if active_count else row["state"]
+            staged_count = conn.execute(
+                "SELECT COUNT(*) AS n FROM staged_uploads WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
+                key,
+            ).fetchone()["n"]
+            reconciled_state = "PENDING" if (active_count or staged_count) else row["state"]
             conn.execute(
                 """INSERT INTO purge_outbox(tenant_id,service_id,vault_id,generation,delete_operation_id,state)
                    VALUES(?,?,?,?,?,?)
