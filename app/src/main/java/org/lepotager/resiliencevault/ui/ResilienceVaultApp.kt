@@ -34,7 +34,9 @@ import java.util.Date
 import kotlinx.coroutines.launch
 import org.lepotager.resiliencevault.BuildConfig
 import org.lepotager.resiliencevault.crypto.AndroidFirstInstallSecurityCeremony
+import org.lepotager.resiliencevault.crypto.AndroidInstallationSecurityMutationCoordinator
 import org.lepotager.resiliencevault.crypto.FirstInstallSecurityStatus
+import org.lepotager.resiliencevault.crypto.InstallationStartupStatus
 import org.lepotager.resiliencevault.panic.AndroidPanicClock
 import org.lepotager.resiliencevault.panic.AtomicFilePanicStateStore
 import org.lepotager.resiliencevault.panic.PanicAdmissionService
@@ -117,6 +119,8 @@ fun ResilienceVaultApp(settings: VaultSettings) {
                 securityRefreshToken += 1
             }
 
+            ActiveVaultAuthorityCard(securityRefreshToken)
+
             RemotePanicPreparationCard(securityRefreshToken)
 
             Card(Modifier.fillMaxWidth()) {
@@ -125,6 +129,45 @@ fun ResilienceVaultApp(settings: VaultSettings) {
                     Text("Désactivé tant que clés, suppression distante et interruptions ne sont pas validées.")
                     Button(onClick = {}, enabled = false) { Text("Validation requise") }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActiveVaultAuthorityCard(securityRefreshToken: Int) {
+    val context = LocalContext.current
+    val owner = remember(context) {
+        AndroidInstallationSecurityMutationCoordinator.create(context.applicationContext)
+    }
+    var status by remember { mutableStateOf<InstallationStartupStatus?>(null) }
+
+    LaunchedEffect(owner, securityRefreshToken) {
+        status = owner.inspectStartup()
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Autorité du coffre", style = MaterialTheme.typography.titleMedium)
+            when (val current = status) {
+                null -> Text("Vérification de l’identité active…")
+                InstallationStartupStatus.NoVault ->
+                    Text("Aucun coffre actif n’est publié sur cette installation.")
+                is InstallationStartupStatus.Ready ->
+                    Text(
+                        "Identité active cohérente. Mode distant : " +
+                            current.record.mode.name + "."
+                    )
+                is InstallationStartupStatus.LegacyAuthorityRequired ->
+                    Text(
+                        "Un coffre local existant nécessite une adoption explicite UNKNOWN ; " +
+                            "aucune absence de cloud n’est supposée."
+                    )
+                InstallationStartupStatus.Blocked ->
+                    Text(
+                        "Autorité active, registre crypto ou transition incohérents : " +
+                            "ouverture du coffre bloquée."
+                    )
             }
         }
     }
