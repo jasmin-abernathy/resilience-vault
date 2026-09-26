@@ -5,7 +5,6 @@ import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.lepotager.resiliencevault.panic.AdmissionAuthoritySnapshot
 import org.lepotager.resiliencevault.panic.AdmissionResult
@@ -20,6 +19,29 @@ import org.lepotager.resiliencevault.panic.RemoteDeleteConfiguration
 import org.lepotager.resiliencevault.panic.ValidatedSmsEnvelope
 import org.lepotager.resiliencevault.panic.VaultAccessBlockReason
 import org.lepotager.resiliencevault.panic.VaultLeaseExecution
+
+internal class InstallationSecurityMutationSerial {
+    private val mutex = Mutex()
+
+    suspend fun <T> withLock(block: suspend () -> T): T {
+        mutex.lock()
+        return try {
+            block()
+        } finally {
+            mutex.unlock()
+        }
+    }
+}
+
+internal sealed interface InstallationStartupStatus {
+    data object NoVault : InstallationStartupStatus
+    data class Ready(val record: ActiveVaultAuthorityRecord) : InstallationStartupStatus
+    data class LegacyAuthorityRequired(
+        val vaultIdHex: String,
+        val generationHex: String,
+    ) : InstallationStartupStatus
+    data object Blocked : InstallationStartupStatus
+}
 
 internal enum class InstallationMutationBlockReason {
     FIRST_INSTALL_NOT_READY,
@@ -53,7 +75,7 @@ internal class AndroidInstallationSecurityMutationCoordinator private constructo
         }
     }
 
-    private val mutex = Mutex()
+    private val mutex = InstallationSecurityMutationSerial()
     private val authorityStore = AtomicActiveVaultAuthorityStore.create(context)
     private val registryStore = AtomicVaultSecurityRegistryStore.create(context)
     private val panicStore = AtomicFilePanicStateStore.create(context)
@@ -63,6 +85,29 @@ internal class AndroidInstallationSecurityMutationCoordinator private constructo
 
     suspend fun resolveAuthority(): ActiveVaultAuthorityResolution = mutex.withLock {
         resolveLocked()
+    }
+
+    suspend fun inspectStartup(): InstallationStartupStatus = mutex.withLock {
+        val authority = authorityStore.read()
+        val registry = registryStore.read()
+        when {
+            authority == ActiveVaultAuthorityRead.Missing &&
+                registry == VaultSecurityRegistryRead.Missing ->
+                InstallationStartupStatus.NoVault
+
+            authority == ActiveVaultAuthorityRead.Missing &&
+                registry is VaultSecurityRegistryRead.Ready ->
+                InstallationStartupStatus.LegacyAuthorityRequired(
+                    registry.record.vaultIdHex,
+                    registry.record.generationHex,
+                )
+
+            else -> when (val resolved = ActiveVaultAuthorityResolver.resolve(authority, registry)) {
+                is ActiveVaultAuthorityResolution.Ready ->
+                    InstallationStartupStatus.Ready(resolved.record)
+                else -> InstallationStartupStatus.Blocked
+            }
+        }
     }
 
     suspend fun adoptExistingUnknown(
