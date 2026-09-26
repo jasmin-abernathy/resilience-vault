@@ -62,3 +62,18 @@ f22cbfa8212e00b9643eb70d0e58315129b8556bc31e2c1d06e9fb68fd197641
 
 The verifier name `opaque-v1` in this vector is a **test/reference label only**. It is not an
 approved production verifier scheme.
+
+
+## Cross-language validation
+
+The V1 vector is also reproduced independently by:
+
+`reference-server/tests/provisioning_digest_vector.kts`
+
+The Kotlin script rebuilds the preimage byte-for-byte with explicit big-endian length prefixes and
+SHA-256, then checks the same expected digest:
+
+`f22cbfa8212e00b9643eb70d0e58315129b8556bc31e2c1d06e9fb68fd197641`
+
+This is a contract/interoperability check only. It does not enable Android `CONFIGURED` and does
+not approve `opaque-v1` or any DELETE verifier construction for production.
