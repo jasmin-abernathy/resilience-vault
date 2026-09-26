@@ -77,7 +77,7 @@ data class TrustedContactVerifier(
 }
 
 data class ArmedRemotePanic(
-    val generationHex: String,
+    val commandGenerationHex: String,
     val bootId: String,
     val startedElapsedRealtimeMs: Long,
     val startedUtcMs: Long,
@@ -195,7 +195,7 @@ data class PanicPersistentState(
         }
 
         arm?.let { armed ->
-            require(RemotePanicCommand.isLowerHex256(armed.generationHex))
+            require(RemotePanicCommand.isLowerHex256(armed.commandGenerationHex))
             require(armed.bootId.isNotBlank())
             require(armed.startedElapsedRealtimeMs >= 0)
             require(armed.startedUtcMs >= 0)

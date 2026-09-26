@@ -26,7 +26,7 @@ internal object LegacyPanicStateV1Fixture {
             out.writeBoolean(remoteDeleteComplete)
             out.writeBoolean(arm != null)
             if (arm != null) {
-                out.writeUTF(arm.generationHex)
+                out.writeUTF(arm.commandGenerationHex)
                 out.writeUTF(arm.bootId)
                 out.writeLong(arm.startedElapsedRealtimeMs)
                 out.writeLong(arm.startedUtcMs)

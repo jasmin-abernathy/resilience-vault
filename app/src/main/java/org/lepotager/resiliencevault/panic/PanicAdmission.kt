@@ -260,7 +260,7 @@ class PanicAdmissionService(
                     AdmissionResult.Rejected(AdmissionRejectionReason.MALFORMED_COMMAND)
                 )
 
-            if (parsed.generationHex != arm.generationHex) {
+            if (parsed.commandGenerationHex != arm.commandGenerationHex) {
                 return@transaction PanicStateMutation.Keep(
                     AdmissionResult.Rejected(AdmissionRejectionReason.INVALID_SECRET)
                 )
@@ -268,7 +268,7 @@ class PanicAdmissionService(
 
             if (!RemotePanicCommand.verifierMatches(
                     expectedVerifierHex = contact.verifierHex,
-                    generationHex = parsed.generationHex,
+                    commandGenerationHex = parsed.commandGenerationHex,
                     e164 = contact.e164,
                     secretHex = parsed.secretHex
                 )

@@ -35,7 +35,7 @@ class PanicStateCodecTest {
     @Test
     fun v1_idle_with_and_without_arm_migrates_to_unknown_without_rewriting_semantics() {
         val arm = ArmedRemotePanic(
-            generationHex = "a".repeat(64),
+            commandGenerationHex = "a".repeat(64),
             bootId = "boot",
             startedElapsedRealtimeMs = 10,
             startedUtcMs = 20,
