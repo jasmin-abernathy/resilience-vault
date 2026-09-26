@@ -6,7 +6,7 @@ import org.junit.Test
 
 class RemotePanicWindowTest {
     private val arm = ArmedRemotePanic(
-        generationHex = "a".repeat(64),
+        commandGenerationHex = "a".repeat(64),
         bootId = "boot-1",
         startedElapsedRealtimeMs = 10_000L,
         startedUtcMs = 1_000_000L,

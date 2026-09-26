@@ -240,7 +240,7 @@ internal object PanicStateCodec {
     private fun writeArm(out: DataOutputStream, arm: ArmedRemotePanic?) {
         out.writeBoolean(arm != null)
         if (arm != null) {
-            out.writeUTF(arm.generationHex)
+            out.writeUTF(arm.commandGenerationHex)
             out.writeUTF(arm.bootId)
             out.writeLong(arm.startedElapsedRealtimeMs)
             out.writeLong(arm.startedUtcMs)
@@ -255,7 +255,7 @@ internal object PanicStateCodec {
 
     private fun readArm(input: DataInputStream): ArmedRemotePanic? {
         if (!input.readBoolean()) return null
-        val generationHex = input.readUTF()
+        val commandGenerationHex = input.readUTF()
         val bootId = input.readUTF()
         val startedElapsed = input.readLong()
         val startedUtc = input.readLong()
@@ -273,7 +273,7 @@ internal object PanicStateCodec {
             }
         }
         return ArmedRemotePanic(
-            generationHex = generationHex,
+            commandGenerationHex = commandGenerationHex,
             bootId = bootId,
             startedElapsedRealtimeMs = startedElapsed,
             startedUtcMs = startedUtc,
