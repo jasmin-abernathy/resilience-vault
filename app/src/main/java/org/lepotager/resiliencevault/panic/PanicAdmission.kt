@@ -5,6 +5,24 @@ data class RemoteArmRequest(
     val durationMs: Long
 )
 
+internal data class AdmissionAuthoritySnapshot(
+    val mode: RemoteDeleteConfiguration,
+    val intent: RemoteDeleteIntent? = null,
+) {
+    init {
+        when (mode) {
+            RemoteDeleteConfiguration.UNKNOWN,
+            RemoteDeleteConfiguration.NOT_CONFIGURED -> require(intent == null)
+            RemoteDeleteConfiguration.CONFIGURED -> requireNotNull(intent)
+        }
+    }
+
+    companion object {
+        fun unknown() = AdmissionAuthoritySnapshot(RemoteDeleteConfiguration.UNKNOWN)
+        fun notConfigured() = AdmissionAuthoritySnapshot(RemoteDeleteConfiguration.NOT_CONFIGURED)
+    }
+}
+
 data class TrustedContactCommand(
     val e164: String,
     val command: String
@@ -54,7 +72,8 @@ enum class AdmissionRejectionReason {
     UNTRUSTED_ENVELOPE,
     SENDER_NOT_ALLOWED,
     MALFORMED_COMMAND,
-    INVALID_SECRET
+    INVALID_SECRET,
+    AUTHORITY_UNAVAILABLE_OR_CHANGED
 }
 
 class PanicAdmissionService(
@@ -64,18 +83,27 @@ class PanicAdmissionService(
     },
     private val tokenGenerator: RemotePanicTokenGenerator = RemotePanicTokenGenerator()
 ) {
-    suspend fun armRemote(request: RemoteArmRequest): RemoteArmResult {
+    suspend fun armRemote(request: RemoteArmRequest): RemoteArmResult =
+        RemoteArmResult.Rejected(ArmRejectionReason.REMOTE_DELETE_PROOF_REQUIRED)
+
+    internal suspend fun armRemoteVerified(
+        request: RemoteArmRequest,
+        authority: AdmissionAuthoritySnapshot,
+    ): RemoteArmResult {
+        if (
+            authority.mode != RemoteDeleteConfiguration.NOT_CONFIGURED ||
+            authority.intent != null
+        ) {
+            return RemoteArmResult.Rejected(ArmRejectionReason.REMOTE_DELETE_PROOF_REQUIRED)
+        }
         return when (val result = store.transaction { state ->
             if (state.phase != PanicPhase.IDLE) {
                 return@transaction PanicStateMutation.Keep(
                     RemoteArmResult.Rejected(ArmRejectionReason.PANIC_ACTIVE)
                 )
             }
-            if (state.remoteDeleteConfiguration != RemoteDeleteConfiguration.NOT_CONFIGURED) {
-                return@transaction PanicStateMutation.Keep(
-                    RemoteArmResult.Rejected(ArmRejectionReason.REMOTE_DELETE_PROOF_REQUIRED)
-                )
-            }
+            // The installation owner already re-read the active authority under its lock.
+            // Never authorize from the panic state's historical IDLE cache alone.
             // Observe after obtaining the store lock, never trust a caller's timestamp.
             val observation = observeOrUnavailable()
             val failure = validateArmRequest(request, observation)
@@ -116,7 +144,10 @@ class PanicAdmissionService(
                 request.durationMs, contacts
             )
             PanicStateMutation.Replace(
-                state.copy(arm = armed),
+                state.copy(
+                    arm = armed,
+                    remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED,
+                ),
                 RemoteArmResult.Armed(
                     secrets.map { (number, secret) ->
                         TrustedContactCommand(number, RemotePanicCommand.build(generation, secret))
@@ -176,7 +207,13 @@ class PanicAdmissionService(
             }
         }
 
-    suspend fun acceptSms(envelope: ValidatedSmsEnvelope): AdmissionResult {
+    suspend fun acceptSms(envelope: ValidatedSmsEnvelope): AdmissionResult =
+        acceptSmsVerified(envelope, AdmissionAuthoritySnapshot.unknown())
+
+    internal suspend fun acceptSmsVerified(
+        envelope: ValidatedSmsEnvelope,
+        authority: AdmissionAuthoritySnapshot,
+    ): AdmissionResult {
         if (!envelope.trustedSystemDelivery || !envelope.completeMessage) {
             return AdmissionResult.Rejected(AdmissionRejectionReason.UNTRUSTED_ENVELOPE)
         }
@@ -192,6 +229,18 @@ class PanicAdmissionService(
             val arm = state.arm ?: return@transaction PanicStateMutation.Keep(
                 AdmissionResult.Rejected(AdmissionRejectionReason.NOT_ARMED)
             )
+
+            if (
+                authority.mode != RemoteDeleteConfiguration.NOT_CONFIGURED ||
+                authority.intent != null
+            ) {
+                return@transaction PanicStateMutation.Replace(
+                    state.copy(arm = null),
+                    AdmissionResult.Rejected(
+                        AdmissionRejectionReason.AUTHORITY_UNAVAILABLE_OR_CHANGED
+                    )
+                )
+            }
 
             val observation = observeOrUnavailable()
             if (!observation.smsChannelReady || !RemotePanicWindow.isValid(arm, observation.clock)) {
@@ -244,6 +293,7 @@ class PanicAdmissionService(
                     panicIdHex = panicId,
                     purgeComplete = false,
                     sessionRevocationComplete = false,
+                    remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED,
                     remoteDeleteCheckpoint = RemoteDeleteCheckpoint.NOT_CONFIGURED,
                     remoteDeleteIntent = null,
                     legacyRemoteUnproven = false,
@@ -257,7 +307,12 @@ class PanicAdmissionService(
         }
     }
 
-    suspend fun acceptLocal(): AdmissionResult {
+    suspend fun acceptLocal(): AdmissionResult =
+        acceptLocalVerified(AdmissionAuthoritySnapshot.unknown())
+
+    internal suspend fun acceptLocalVerified(
+        authority: AdmissionAuthoritySnapshot,
+    ): AdmissionResult {
         val panicId = tokenGenerator.newHex256()
         return when (val result = store.transaction { state ->
             if (state.phase != PanicPhase.IDLE) {
@@ -266,7 +321,7 @@ class PanicAdmissionService(
                 )
             } else {
                 PanicStateMutation.Replace(
-                    state = localPanicState(state, panicId),
+                    state = localPanicState(state, panicId, authority),
                     value = AdmissionResult.Accepted(panicId)
                 )
             }
@@ -279,14 +334,19 @@ class PanicAdmissionService(
     private fun localPanicState(
         state: PanicPersistentState,
         panicId: String,
+        authority: AdmissionAuthoritySnapshot,
     ): PanicPersistentState =
-        if (state.remoteDeleteConfiguration == RemoteDeleteConfiguration.NOT_CONFIGURED) {
+        if (
+            authority.mode == RemoteDeleteConfiguration.NOT_CONFIGURED &&
+            authority.intent == null
+        ) {
             state.copy(
                 phase = PanicPhase.LOCAL_PENDING,
                 arm = null,
                 panicIdHex = panicId,
                 purgeComplete = false,
                 sessionRevocationComplete = false,
+                remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED,
                 remoteDeleteCheckpoint = RemoteDeleteCheckpoint.NOT_CONFIGURED,
                 remoteDeleteIntent = null,
                 legacyRemoteUnproven = false,
@@ -299,6 +359,7 @@ class PanicAdmissionService(
                 panicIdHex = panicId,
                 purgeComplete = false,
                 sessionRevocationComplete = false,
+                remoteDeleteConfiguration = RemoteDeleteConfiguration.UNKNOWN,
                 remoteDeleteCheckpoint = RemoteDeleteCheckpoint.LEGACY_UNPROVEN,
                 remoteDeleteIntent = null,
                 legacyRemoteUnproven = true,
