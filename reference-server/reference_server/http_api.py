@@ -3,6 +3,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import re
+import sqlite3
 import time
 from typing import Any, Callable, Mapping
 
@@ -119,6 +120,8 @@ class ReferenceApi:
             self._json(handler, 404, {"version": 1, "error": "NOT_FOUND"})
         except (Tombstoned, CapabilityUnavailable):
             self._json(handler, 409, {"version": 1, "error": "GENERATION_UNAVAILABLE"})
+        except sqlite3.DatabaseError:
+            self._json(handler, 503, {"version": 1, "error": "STORAGE_UNAVAILABLE"})
         except (ValueError, TypeError, AttributeError, UnicodeDecodeError, json.JSONDecodeError):
             self._json(handler, 400, {"version": 1, "error": "INVALID_REQUEST"})
 

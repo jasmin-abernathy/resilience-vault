@@ -249,3 +249,53 @@ production.
 - comportement en cas de fuite de capability ;
 - reproduction indépendante des vecteurs en Kotlin/JVM avant adoption ;
 - revue crypto indépendante avant tout authenticator réel.
+
+
+---
+
+# Durcissement post-PR31 — borne du proof et erreurs stockage
+
+Le parseur public `DeleteCompletionProofCandidate.parse_json(raw)` applique désormais la même
+borne locale que l'API HTTP candidate :
+
+```text
+MAX_PROOF_BODY_BYTES = 8 KiB
+```
+
+Avant tout décodage :
+
+- le type doit être exactement `bytes` ;
+- le corps doit être non vide ;
+- la taille doit être <= 8 KiB.
+
+Un JSON valide suivi uniquement de whitespace reste donc refusé si sa taille dépasse la borne. Cette
+borne protège le parseur ; elle ne transforme pas le proof candidate en attestation authentifiée.
+
+## Frontière HTTP / attestation
+
+Le corps renvoyé par `http_api.py` reste une réponse de session locale candidate. Même si ses champs
+sont compatibles avec une future preuve, **il ne doit jamais être présenté comme
+`DeleteCompletionProofCandidate` attesté simplement parce qu'il arrive sur HTTP 200**.
+
+La validation de `proof.py` établit seulement :
+
+- format ;
+- binding ;
+- révision/fraîcheur minimale ;
+- scope annoncé.
+
+Elle n'établit pas l'identité de l'émetteur. Une production réelle exigera une reconsultation
+authentifiée d'une autorité durable ou une attestation cryptographique revue avec gestion de clés.
+
+## Erreurs SQLite
+
+Une `sqlite3.DatabaseError` levée pendant une requête HTTP est maintenant convertie en refus
+générique :
+
+```text
+HTTP 503
+{"version":1,"error":"STORAGE_UNAVAILABLE"}
+```
+
+Aucun détail SQLite n'est renvoyé au client. Une corruption au démarrage reste bloquante : le
+serveur de référence ne reconstruit jamais ACTIVE à partir d'un état incertain.

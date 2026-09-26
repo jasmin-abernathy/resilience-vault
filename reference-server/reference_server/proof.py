@@ -9,6 +9,7 @@ _LABEL = re.compile(r"^[a-z0-9][a-z0-9._:@-]*$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _HEX_ID = re.compile(r"^[0-9a-f]{32,64}$")
 _ALLOWED_SCOPE = frozenset({"active", "staging", "versions", "replicas"})
+MAX_PROOF_BODY_BYTES = 8 * 1024
 
 
 class ProofValidationError(ValueError):
@@ -60,8 +61,12 @@ class DeleteCompletionProofCandidate:
 
     @classmethod
     def parse_json(cls, raw: bytes) -> "DeleteCompletionProofCandidate":
+        if type(raw) is not bytes:
+            raise ProofValidationError("proof body must be bytes")
         if not raw:
             raise ProofValidationError("missing proof body")
+        if len(raw) > MAX_PROOF_BODY_BYTES:
+            raise ProofValidationError("proof body exceeds maximum size")
 
         def pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             out: dict[str, Any] = {}
