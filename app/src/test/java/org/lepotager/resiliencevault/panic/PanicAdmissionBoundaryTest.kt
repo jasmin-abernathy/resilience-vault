@@ -21,7 +21,7 @@ class PanicAdmissionBoundaryTest {
             }
         }
         val service = PanicAdmissionService(store, PanicAdmissionEnvironment { observation })
-        val armed = service.armRemote(request) as RemoteArmResult.Armed
+        val armed = arm(service) as RemoteArmResult.Armed
         val envelope = ValidatedSmsEnvelope(request.canonicalContactsE164.single(), armed.commands.single().command, true, true)
         beforeTransaction = {
             observation = PanicAdmissionObservation(start.copy(
@@ -29,7 +29,7 @@ class PanicAdmissionBoundaryTest {
                 utcMs = start.utcMs + request.durationMs
             ), true)
         }
-        val result = service.acceptSms(envelope) as AdmissionResult.Rejected
+        val result = sms(service, envelope) as AdmissionResult.Rejected
         assertEquals(AdmissionRejectionReason.EXPIRED_OR_INVALIDATED, result.reason)
         assertNull((store.read() as PanicStoreReadResult.Ready).state.arm)
     }
@@ -42,8 +42,8 @@ class PanicAdmissionBoundaryTest {
             reads++
             PanicAdmissionObservation(start, reads < 4)
         })
-        val armed = service.armRemote(request) as RemoteArmResult.Armed // observations 1 and 2
-        val result = service.acceptSms(ValidatedSmsEnvelope(request.canonicalContactsE164.single(), armed.commands.single().command, true, true))
+        val armed = arm(service) as RemoteArmResult.Armed // observations 1 and 2
+        val result = sms(service, ValidatedSmsEnvelope(request.canonicalContactsE164.single(), armed.commands.single().command, true, true))
         assertTrue(result is AdmissionResult.Rejected)
         assertNull((store.read() as PanicStoreReadResult.Ready).state.arm)
     }
@@ -55,21 +55,25 @@ class PanicAdmissionBoundaryTest {
         val service = PanicAdmissionService(store, PanicAdmissionEnvironment {
             PanicAdmissionObservation(start.copy(utcMs = Long.MAX_VALUE), true)
         })
-        assertEquals(ArmRejectionReason.INVALID_CLOCK, (service.armRemote(request) as RemoteArmResult.Rejected).reason)
+        assertEquals(ArmRejectionReason.INVALID_CLOCK, (arm(service) as RemoteArmResult.Rejected).reason)
         val broken = PanicAdmissionService(store, PanicAdmissionEnvironment { throw SecurityException() })
-        assertTrue(broken.armRemote(request) is RemoteArmResult.Rejected)
+        assertTrue(arm(broken) is RemoteArmResult.Rejected)
     }
 
     @Test
     fun failed_entropy_invalidates_previous_window_and_is_not_reported_as_armed() = runTest {
         val store = knownNoCloudStore()
         val environment = PanicAdmissionEnvironment { PanicAdmissionObservation(start, true) }
-        assertTrue(PanicAdmissionService(store, environment).armRemote(request) is RemoteArmResult.Armed)
+        assertTrue(
+            PanicAdmissionService(store, environment)
+                .armRemoteVerified(request, AdmissionAuthoritySnapshot.notConfigured()) is
+                RemoteArmResult.Armed
+        )
         val rng = object : SecureRandom() {
             override fun nextBytes(bytes: ByteArray) { throw IllegalStateException("simulated RNG failure") }
         }
         val service = PanicAdmissionService(store, environment, RemotePanicTokenGenerator(rng))
-        assertEquals(ArmRejectionReason.ENTROPY_FAILURE, (service.armRemote(request) as RemoteArmResult.Rejected).reason)
+        assertEquals(ArmRejectionReason.ENTROPY_FAILURE, (arm(service) as RemoteArmResult.Rejected).reason)
         assertNull((store.read() as PanicStoreReadResult.Ready).state.arm)
     }
 
@@ -78,13 +82,22 @@ class PanicAdmissionBoundaryTest {
         val store = knownNoCloudStore()
         var observation = PanicAdmissionObservation(start, true)
         val service = PanicAdmissionService(store, PanicAdmissionEnvironment { observation })
-        val armed = service.armRemote(request) as RemoteArmResult.Armed
+        val armed = arm(service) as RemoteArmResult.Armed
         observation = observation.copy(clock = start.copy(utcMs = start.utcMs + 10_000))
         assertNull((service.refreshRemoteState() as PanicStoreReadResult.Ready).state.arm)
         observation = PanicAdmissionObservation(start, true)
-        val result = service.acceptSms(ValidatedSmsEnvelope(request.canonicalContactsE164.single(), armed.commands.single().command, true, true))
+        val result = sms(service, ValidatedSmsEnvelope(request.canonicalContactsE164.single(), armed.commands.single().command, true, true))
         assertEquals(AdmissionRejectionReason.NOT_ARMED, (result as AdmissionResult.Rejected).reason)
     }
+
+    private suspend fun arm(service: PanicAdmissionService): RemoteArmResult =
+        service.armRemoteVerified(request, AdmissionAuthoritySnapshot.notConfigured())
+
+    private suspend fun sms(
+        service: PanicAdmissionService,
+        envelope: ValidatedSmsEnvelope,
+    ): AdmissionResult =
+        service.acceptSmsVerified(envelope, AdmissionAuthoritySnapshot.notConfigured())
 
     private fun knownNoCloudStore(): InMemoryPanicStateStore =
         InMemoryPanicStateStore(
