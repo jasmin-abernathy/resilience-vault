@@ -1,10 +1,13 @@
 # Resilience Vault
 
-Coffre Android privé en phase de bootstrap, destiné à devenir open source après stabilisation du modèle de sécurité.
+Coffre Android en phase de bootstrap de sécurité. Le code source est actuellement visible
+publiquement, mais **aucune version n'est encore déclarée prête pour un usage de production** et la
+licence de redistribution reste à choisir.
 
 ## Objectif
 
-Resilience Vault doit permettre de sauvegarder régulièrement des données choisies explicitement par l’utilisateur, puis de les rendre rapidement inaccessibles sur l’appareil en situation d’urgence.
+Resilience Vault doit permettre de sauvegarder régulièrement des données choisies explicitement par
+l’utilisateur, puis de les rendre rapidement inaccessibles sur l’appareil en situation d’urgence.
 
 Sources prévues :
 
@@ -14,17 +17,25 @@ Sources prévues :
 
 ## État du bootstrap
 
-Cette base contient :
+La pile de travail contient notamment :
 
 - projet Android Kotlin/Compose ;
 - sélection persistante de dossiers SAF ;
 - connecteurs Signal et dossier générique ;
-- port Telegram TDLib/JNI ;
-- orchestration testable du panic ;
-- une frontière de synchronisation documentée, sans tâche réseau active tant que le coffre n’est pas prêt ;
-- CI via `app-build-factory`.
+- port Telegram préparé, avec TDLib/JNI de production encore à finaliser ;
+- orchestration testable du panic et machine à états fail-closed ;
+- intégration Tink/Keystore/biométrie et cycle de clés, toujours derrière la porte
+  `PRODUCTION_CRYPTO_READY=false` ;
+- primitive delete-only, provisioning distant et registre d'autorité du coffre ;
+- serveur DELETE de référence Python/SQLite, uniquement local, pour valider les transactions,
+  tombstones, purges et scénarios de restauration ;
+- CI GitHub Actions couvrant les invariants de sécurité, les modèles exécutables, le serveur de
+  référence et les tâches Gradle de validation.
 
-Le format cryptographique distant, la récupération multi-appareil et le bouton d’urgence réel sont volontairement verrouillés jusqu’à audit. L’app ne prétend donc pas encore fournir une sauvegarde de production ou un effacement d’urgence fiable.
+Le backend de production, l'attestation d'effacement, la récupération multi-appareil de bout en
+bout et l'activation réelle du panic distant restent volontairement verrouillés jusqu'aux audits et
+tests matériels prévus. L'app ne prétend donc pas encore fournir une sauvegarde de production ou un
+effacement d'urgence fiable.
 
 ## Architecture
 
@@ -55,14 +66,22 @@ TELEGRAM_API_HASH=...
 
 Sans eux, Telegram reste désactivé et le reste de l’application fonctionne.
 
-Le binaire TDLib/JNI n’est pas encore vendored : il sera ajouté dans un module séparé après choix d’une chaîne de build Android reproductible.
+Le binaire TDLib/JNI n’est pas encore vendored : il sera ajouté dans un module séparé après choix
+et validation d’une chaîne de build Android reproductible.
 
 ## Build
 
 Pré-requis : JDK 17 et Android SDK 36.
 
 ```bash
-./gradlew testDebugUnitTest assembleDebug lintDebug
+./gradlew testDebugUnitTest compileDebugAndroidTestKotlin assembleDebug lintDebug
+```
+
+Le serveur DELETE de référence utilise uniquement la bibliothèque standard Python :
+
+```bash
+cd reference-server
+python3 -m unittest discover -s tests -v
 ```
 
 ## Invariants
@@ -74,8 +93,11 @@ Pré-requis : JDK 17 et Android SDK 36.
 - backup Android désactivé ;
 - aucune donnée sensible dans les logs ;
 - destruction locale des clés avant toute opération réseau du panic ;
-- aucun secret/keystore/token dans Git.
+- aucun secret/keystore/token dans Git ;
+- `PRODUCTION_CRYPTO_READY=false` tant que les audits et tests matériels ne sont pas terminés ;
+- `SMS_REMOTE_PANIC_READY=false` tant que son canal dédié n'est pas validé.
 
 ## Licence
 
-Le dépôt reste privé pendant le bootstrap. La licence de publication doit être choisie avant ouverture du dépôt.
+Le dépôt est publiquement visible, mais aucune licence de redistribution n'est encore définie.
+Le choix de licence fait partie des décisions à prendre avant une publication stable.
