@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "app/**"
+      - "reference-server/**"
       - "tools/**"
       - "gradle/**"
       - "gradlew"
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - "app/**"
+      - "reference-server/**"
       - "tools/**"
       - "gradle/**"
       - "gradlew"
@@ -36,6 +38,9 @@ jobs:
         run: python3 tools/check_security_invariants.py
       - name: Run executable security models
         run: python3 -m unittest discover -s tools/security_model -p 'test_*.py'
+      - name: Run DELETE reference-server tests
+        working-directory: reference-server
+        run: python3 -m unittest discover -s tests -v
 
   android:
     needs: security-contracts

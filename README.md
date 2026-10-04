@@ -1,6 +1,6 @@
 # Resilience Vault
 
-Coffre Android privé en phase de bootstrap, destiné à devenir open source après stabilisation du modèle de sécurité.
+Coffre Android en phase de bootstrap de sécurité. Le dépôt est public, mais aucune version de production n'est encore déclarée sûre ni prête à être distribuée.
 
 ## Objectif
 
@@ -14,17 +14,20 @@ Sources prévues :
 
 ## État du bootstrap
 
-Cette base contient :
+Cette base contient notamment :
 
 - projet Android Kotlin/Compose ;
 - sélection persistante de dossiers SAF ;
 - connecteurs Signal et dossier générique ;
 - port Telegram TDLib/JNI ;
 - orchestration testable du panic ;
-- une frontière de synchronisation documentée, sans tâche réseau active tant que le coffre n’est pas prêt ;
-- CI via `app-build-factory`.
+- primitives Tink/Keystore et cycle de clés encore bloqués par les portes de production ;
+- états persistants et reprise après interruption pour le panic ;
+- contrat DELETE-only, provisioning et serveur local de référence SQLite ;
+- une frontière de synchronisation documentée, sans activation du coffre distant de production ;
+- CI Android + invariants de sécurité + tests du serveur de référence.
 
-Le format cryptographique distant, la récupération multi-appareil et le bouton d’urgence réel sont volontairement verrouillés jusqu’à audit. L’app ne prétend donc pas encore fournir une sauvegarde de production ou un effacement d’urgence fiable.
+Le backend de production, la preuve d'effacement authentifiée, la récupération multi-appareil de bout en bout et les capacités sensibles restent volontairement verrouillés jusqu'aux audits et tests physiques prévus. L'app ne prétend donc pas encore fournir une sauvegarde de production ou un effacement d'urgence fiable.
 
 ## Architecture
 
@@ -65,6 +68,13 @@ Pré-requis : JDK 17 et Android SDK 36.
 ./gradlew testDebugUnitTest assembleDebug lintDebug
 ```
 
+Le serveur DELETE de référence se teste séparément :
+
+```bash
+cd reference-server
+python3 -m unittest discover -s tests -v
+```
+
 ## Invariants
 
 - aucune permission de stockage globale ;
@@ -74,8 +84,10 @@ Pré-requis : JDK 17 et Android SDK 36.
 - backup Android désactivé ;
 - aucune donnée sensible dans les logs ;
 - destruction locale des clés avant toute opération réseau du panic ;
-- aucun secret/keystore/token dans Git.
+- aucun secret/keystore/token dans Git ;
+- `PRODUCTION_CRYPTO_READY=false` tant que l'audit et les tests physiques ne sont pas terminés ;
+- `SMS_REMOTE_PANIC_READY=false` tant que le canal dédié n'est pas audité.
 
 ## Licence
 
-Le dépôt reste privé pendant le bootstrap. La licence de publication doit être choisie avant ouverture du dépôt.
+Le dépôt est public mais ne contient pas encore de fichier `LICENSE`. Une licence open source doit être choisie avant toute publication stable ; tant qu'elle est absente, le code ne doit pas être présenté comme une release open source réutilisable.
