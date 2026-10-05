@@ -36,6 +36,22 @@ class ProofBodyBoundaryTest(unittest.TestCase):
         }
         return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
+    def test_schema_version_requires_integer_not_boolean_or_float(self) -> None:
+        for version in (True, 1.0, "1", None):
+            with self.subTest(version=version):
+                value = json.loads(self._valid_body())
+                value["schemaVersion"] = version
+                with self.assertRaises(ProofValidationError):
+                    DeleteCompletionProofCandidate.parse_json(json.dumps(value).encode())
+
+    def test_structured_state_is_rejected_as_invalid_proof(self) -> None:
+        for state in ([], {}, None):
+            with self.subTest(state=state):
+                value = json.loads(self._valid_body())
+                value["state"] = state
+                with self.assertRaises(ProofValidationError):
+                    DeleteCompletionProofCandidate.parse_json(json.dumps(value).encode())
+
     def test_parser_accepts_bounded_bytes_and_rejects_other_buffer_types(self) -> None:
         raw = self._valid_body()
         self.assertLessEqual(len(raw), MAX_PROOF_BODY_BYTES)

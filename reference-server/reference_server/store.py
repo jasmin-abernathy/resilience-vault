@@ -63,8 +63,13 @@ class ReferenceStore:
         delete_operation_id_factory: Callable[[], str] | None = None,
         fault_injector: Callable[[str], None] | None = None,
     ) -> None:
-        self.database_path = Path(database_path)
-        self.tombstone_ledger_path = Path(tombstone_ledger_path)
+        self.database_path = Path(database_path).resolve()
+        self.tombstone_ledger_path = Path(tombstone_ledger_path).resolve()
+        if self.database_path == self.tombstone_ledger_path or (
+            self.database_path.exists() and self.tombstone_ledger_path.exists()
+            and self.database_path.samefile(self.tombstone_ledger_path)
+        ):
+            raise ValueError("primary database and tombstone ledger must be distinct files")
         self.now = now or (lambda: int(time.time()))
         self.delete_operation_id_factory = delete_operation_id_factory or (lambda: secrets.token_hex(16))
         self.fault_injector = fault_injector
@@ -79,21 +84,42 @@ class ReferenceStore:
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
-            self.database_path,
+            self.database_path.as_uri() + "?mode=rw",
+            uri=True,
             timeout=5.0,
             isolation_level=None,
             check_same_thread=False,
         )
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=DELETE")
-        conn.execute("PRAGMA synchronous=FULL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("ATTACH DATABASE ? AS ledger", (str(self.tombstone_ledger_path),))
-        conn.execute("PRAGMA ledger.journal_mode=DELETE")
-        conn.execute("PRAGMA ledger.synchronous=FULL")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=DELETE")
+            conn.execute("PRAGMA synchronous=FULL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("ATTACH DATABASE ? AS ledger",
+                         (self.tombstone_ledger_path.as_uri() + "?mode=rw",))
+            conn.execute("PRAGMA ledger.journal_mode=DELETE")
+            conn.execute("PRAGMA ledger.synchronous=FULL")
+            return conn
+        except BaseException:
+            conn.close()
+            raise
 
     def _initialize(self) -> None:
+        primary_exists = self.database_path.exists()
+        ledger_exists = self.tombstone_ledger_path.exists()
+        if primary_exists != ledger_exists:
+            raise sqlite3.DatabaseError("incomplete storage pair; automatic recreation refused")
+        if primary_exists:
+            # Opening an existing installation must never recreate missing schema/authority.
+            with closing(self._connect()) as conn:
+                for table in ("vault_generations", "provisionings", "staged_uploads",
+                              "active_objects", "purge_outbox", "ledger.tombstones"):
+                    conn.execute(f"SELECT * FROM {table} LIMIT 0")
+            return
+        # Exclusive reservation prevents a competing bootstrap from treating a partial pair
+        # as fresh. Interrupted initialization remains blocked for operator inspection.
+        self.database_path.touch(exist_ok=False)
+        self.tombstone_ledger_path.touch(exist_ok=False)
         with closing(self._connect()) as conn:
             conn.executescript(
                 """
@@ -384,6 +410,9 @@ class ReferenceStore:
                 rows = conn.execute("SELECT * FROM purge_outbox WHERE state='PENDING' ORDER BY rowid").fetchall()
                 for row in rows:
                     key = (row["tenant_id"], row["service_id"], row["vault_id"], row["generation"])
+                    authority = self._ledger_tombstone(conn, *key)
+                    if authority is None or authority["delete_operation_id"] != row["delete_operation_id"]:
+                        raise sqlite3.DatabaseError("purge outbox has no matching tombstone authority")
                     self._fault("purge.before_delete")
                     conn.execute(
                         "DELETE FROM staged_uploads WHERE tenant_id=? AND service_id=? AND vault_id=? AND generation=?",
@@ -454,10 +483,9 @@ class ReferenceStore:
             row = conn.execute("SELECT * FROM active_objects WHERE object_id=?", (object_id,)).fetchone()
             if row is None:
                 raise StoreNotFound("active object not found")
-            if self._ledger_tombstone(
+            self._require_live_generation(
                 conn, row["tenant_id"], row["service_id"], row["vault_id"], row["generation"]
-            ):
-                raise Tombstoned("tombstoned generation is not readable")
+            )
             return row["object_id"]
 
     def administrative_restore_object(
@@ -551,6 +579,23 @@ class ReferenceStore:
         ).fetchone()
 
     def _reconcile_tombstones_in_transaction(self, conn: sqlite3.Connection) -> None:
+        # Evidence of deletion in the primary must never be repaired into a new ledger.
+        orphan = conn.execute("""
+            SELECT 1 FROM vault_generations AS v
+            WHERE v.tombstoned=1 AND NOT EXISTS (
+                SELECT 1 FROM ledger.tombstones AS t
+                WHERE t.tenant_id=v.tenant_id AND t.service_id=v.service_id
+                  AND t.vault_id=v.vault_id AND t.generation=v.generation)
+            UNION ALL
+            SELECT 1 FROM purge_outbox AS p WHERE NOT EXISTS (
+                SELECT 1 FROM ledger.tombstones AS t
+                WHERE t.tenant_id=p.tenant_id AND t.service_id=p.service_id
+                  AND t.vault_id=p.vault_id AND t.generation=p.generation
+                  AND t.delete_operation_id=p.delete_operation_id)
+            LIMIT 1
+        """).fetchone()
+        if orphan is not None:
+            raise sqlite3.DatabaseError("primary deletion evidence contradicts tombstone authority")
         rows = conn.execute("SELECT * FROM ledger.tombstones").fetchall()
         for row in rows:
             key = (row["tenant_id"], row["service_id"], row["vault_id"], row["generation"])

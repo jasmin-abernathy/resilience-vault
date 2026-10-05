@@ -96,6 +96,7 @@ jobs:
           chmod +x ./gradlew
           ./gradlew --version
 
+      # Validation only: no APK/AAB packaging without an explicit delivery request.
       - name: Run validated Gradle tasks
         shell: bash
-        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest compileDebugAndroidTestKotlin assembleDebug lintDebug
+        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest compileDebugAndroidTestKotlin lintDebug

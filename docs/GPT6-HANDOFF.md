@@ -49,3 +49,9 @@ Le relais post-implémentation GPT-6 a été traité. Lire désormais
 [la revue de code](GPT6-IMPLEMENTATION-REVIEW-2026-09-21.md), le format crypto et le contrat
 DELETE-only liés depuis ARCHITECTURE.md. La prochaine revue GPT-6 devra porter sur les leases,
 le provisioning et le cycle de clés réellement implémentés. Les intégrations restent non activables.
+
+## Revue de consolidation du 5 octobre 2026
+
+Lire [la revue et les corrections du lot](SECURITY-REVIEW-2026-10-05.md) avant toute reprise de #33.
+Le serveur de référence refuse désormais la perte partielle de son stockage et les contradictions
+du ledger. Les choix opérationnels et les tests physiques restent ouverts ; aucun gate activé.

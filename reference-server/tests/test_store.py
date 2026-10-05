@@ -77,6 +77,104 @@ class StoreIntegrationTest(unittest.TestCase):
             state="PROVISIONED",
         )
 
+    def test_missing_ledger_at_restart_is_not_recreated(self) -> None:
+        self.ledger.unlink()
+        with self.assertRaises(sqlite3.DatabaseError):
+            ReferenceStore(self.db, self.ledger)
+        self.assertFalse(self.ledger.exists())
+
+    def test_missing_primary_at_restart_is_not_recreated(self) -> None:
+        self.db.unlink()
+        with self.assertRaises(sqlite3.DatabaseError):
+            ReferenceStore(self.db, self.ledger)
+        self.assertFalse(self.db.exists())
+
+    def test_missing_ledger_during_operation_is_not_recreated(self) -> None:
+        self.ledger.unlink()
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.store.create_generation(tenant_id=self.tenant, service_id=self.service,
+                                         vault_id=self.vault, generation="9" * 64)
+        self.assertFalse(self.ledger.exists())
+
+    def test_missing_primary_during_operation_is_not_recreated(self) -> None:
+        self.db.unlink()
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.store.get_provisioning(tenant_id=self.tenant, operation_id=self.operation)
+        self.assertFalse(self.db.exists())
+
+    def test_empty_ledger_at_restart_is_not_initialized(self) -> None:
+        self.ledger.write_bytes(b"")
+        with self.assertRaises(sqlite3.DatabaseError):
+            ReferenceStore(self.db, self.ledger)
+        with sqlite3.connect(self.ledger) as conn:
+            self.assertEqual([], conn.execute("SELECT name FROM sqlite_master").fetchall())
+
+    def test_missing_primary_schema_is_not_repaired(self) -> None:
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("DROP TABLE purge_outbox")
+        with self.assertRaises(sqlite3.DatabaseError):
+            ReferenceStore(self.db, self.ledger)
+        with sqlite3.connect(self.db) as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT name FROM sqlite_master WHERE name='purge_outbox'").fetchone())
+
+    def test_rolled_back_ledger_conflicting_with_primary_blocks_restart(self) -> None:
+        backup = Path(self.tmp.name) / "old-ledger.sqlite"
+        shutil.copy2(self.ledger, backup)
+        self.store.put_provisioning(self._row())
+        self.store.delete_generation(tenant_id=self.tenant, service_id=self.service,
+                                     vault_id=self.vault, generation=self.generation)
+        shutil.copy2(backup, self.ledger)
+        with self.assertRaises(sqlite3.DatabaseError):
+            ReferenceStore(self.db, self.ledger)
+
+    def test_read_rejects_primary_tombstone_when_ledger_row_is_missing(self) -> None:
+        self.store.stage_upload(upload_id="u1", object_id="o1", tenant_id=self.tenant,
+                                service_id=self.service, vault_id=self.vault,
+                                generation=self.generation)
+        self.store.finalize_upload(upload_id="u1")
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("UPDATE vault_generations SET tombstoned=1")
+        with self.assertRaises(Tombstoned):
+            self.store.read_object(object_id="o1")
+
+    def test_purge_refuses_missing_or_mismatched_authority(self) -> None:
+        self.store.put_provisioning(self._row())
+        self.store.stage_upload(upload_id="u1", object_id="o1", tenant_id=self.tenant,
+                                service_id=self.service, vault_id=self.vault,
+                                generation=self.generation)
+        self.store.delete_generation(tenant_id=self.tenant, service_id=self.service,
+                                     vault_id=self.vault, generation=self.generation)
+        for mismatch in (True, False):
+            with self.subTest(mismatch=mismatch):
+                with sqlite3.connect(self.ledger) as conn:
+                    if mismatch:
+                        conn.execute("UPDATE tombstones SET delete_operation_id='wrong'")
+                    else:
+                        conn.execute("DELETE FROM tombstones")
+                with self.assertRaises(sqlite3.DatabaseError):
+                    self.store.run_purge_once()
+                self.assertEqual(1, self.store.staged_upload_count(
+                    tenant_id=self.tenant, service_id=self.service,
+                    vault_id=self.vault, generation=self.generation))
+
+    def test_storage_paths_cannot_alias_the_same_file(self) -> None:
+        alias = Path(self.tmp.name) / "alias.sqlite"
+        alias.symlink_to(self.db)
+        hardlink = Path(self.tmp.name) / "hardlink.sqlite"
+        hardlink.hardlink_to(self.db)
+        for path in (self.db, alias, hardlink):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                ReferenceStore(self.db, path)
+
+    def test_uri_metacharacters_in_storage_paths_are_literal(self) -> None:
+        root = Path(self.tmp.name) / "space # ? %"
+        store = ReferenceStore(root / "main.sqlite", root / "ledger.sqlite")
+        store.create_generation(tenant_id=self.tenant, service_id=self.service,
+                                vault_id=self.vault, generation=self.generation)
+        ReferenceStore(root / "main.sqlite", root / "ledger.sqlite")
+        self.assertTrue((root / "ledger.sqlite").is_file())
+
     def test_identical_concurrent_puts_commit_once_and_replay_same_row(self) -> None:
         row = self._row()
         barrier = threading.Barrier(3)

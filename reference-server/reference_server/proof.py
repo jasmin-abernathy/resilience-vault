@@ -33,7 +33,7 @@ class DeleteCompletionProofCandidate:
     backup_policy_id: str
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
+        if type(self.schema_version) is not int or self.schema_version != 1:
             raise ProofValidationError("unsupported proof schema version")
         for name, value, limit in (
             ("serviceId", self.service_id, 64),
@@ -48,7 +48,7 @@ class DeleteCompletionProofCandidate:
         for name, value in (("deleteOperationId", self.delete_operation_id), ("responseId", self.response_id)):
             if not isinstance(value, str) or not _HEX_ID.fullmatch(value):
                 raise ProofValidationError(f"{name} is not canonical")
-        if self.state not in {"PENDING", "COMPLETE"}:
+        if not isinstance(self.state, str) or self.state not in {"PENDING", "COMPLETE"}:
             raise ProofValidationError("unknown delete proof state")
         if type(self.tombstone_revision) is not int or self.tombstone_revision <= 0:
             raise ProofValidationError("tombstoneRevision must be positive")
