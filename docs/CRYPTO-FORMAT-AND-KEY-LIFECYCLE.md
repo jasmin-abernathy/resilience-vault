@@ -1,6 +1,8 @@
 # Coffre V1 — format et cycle de vie des clés
 
-Décision GPT-6 du 21 septembre 2026, issue #1. **Spécifié, pas implémenté ni activable.**
+État de l’intégration réelle et limites actuelles : [TINK-INTEGRATION-2026-09-24.md](TINK-INTEGRATION-2026-09-24.md).
+
+Décision de conception historique du 21 septembre 2026, issue #1. **Spécifié, pas implémenté ni activable.**
 Le seul code livré ici est l'encodage canonique du contexte authentifié `VaultBinding`,
 avec son vecteur de test. Il ne chiffre rien. `PRODUCTION_CRYPTO_READY` reste false.
 

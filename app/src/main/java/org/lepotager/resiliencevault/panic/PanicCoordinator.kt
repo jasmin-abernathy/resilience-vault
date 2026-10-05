@@ -1,6 +1,8 @@
 package org.lepotager.resiliencevault.panic
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 
 enum class PanicEffectResult {
@@ -8,6 +10,24 @@ enum class PanicEffectResult {
     RETRYABLE_FAILURE,
     PERMANENT_FAILURE,
     NOT_ATTEMPTED
+}
+
+enum class RemoteDeleteRetryReason {
+    NO_NETWORK,
+    RATE_LIMITED,
+    SERVER_ERROR,
+    PROTOCOL_AMBIGUOUS,
+    TIMEOUT,
+    ADAPTER_UNAVAILABLE,
+}
+
+sealed interface RemoteDeleteAttempt {
+    data object Complete : RemoteDeleteAttempt
+    data object TombstonedPending : RemoteDeleteAttempt
+    data object BlockedAuth : RemoteDeleteAttempt
+    data class RetryableFailure(
+        val reason: RemoteDeleteRetryReason,
+    ) : RemoteDeleteAttempt
 }
 
 interface LocalCriticalPanicEffects {
@@ -18,7 +38,7 @@ interface LocalCriticalPanicEffects {
 interface PostDestructionPanicEffects {
     suspend fun purgePrivateStaging(): PanicEffectResult
     suspend fun revokeDedicatedSessions(): PanicEffectResult
-    suspend fun deleteRemoteVault(): PanicEffectResult
+    suspend fun deleteRemoteVault(intent: RemoteDeleteIntent): RemoteDeleteAttempt
 }
 
 sealed interface LocalRecoveryResult {
@@ -36,7 +56,8 @@ data class PostRecoveryReport(
     val phase: PanicPhase,
     val purge: PanicEffectResult?,
     val sessionRevocation: PanicEffectResult?,
-    val remoteDelete: PanicEffectResult?
+    val remoteDeleteAttempt: RemoteDeleteAttempt?,
+    val remoteDeleteCheckpoint: RemoteDeleteCheckpoint?,
 )
 
 sealed interface PostRecoveryResult {
@@ -60,7 +81,9 @@ class PanicRecoveryCoordinator(
 
         when (state.phase) {
             PanicPhase.IDLE -> return LocalRecoveryResult.NoPanic
-            PanicPhase.POST_PENDING, PanicPhase.COMPLETE ->
+            PanicPhase.POST_PENDING,
+            PanicPhase.COMPLETE,
+            PanicPhase.LEGACY_COMPLETE_UNVERIFIED ->
                 return LocalRecoveryResult.AlreadyPastLocalPhase
             PanicPhase.LOCAL_PENDING -> Unit
         }
@@ -111,16 +134,17 @@ class PanicRecoveryCoordinator(
         when (state.phase) {
             PanicPhase.IDLE -> return PostRecoveryResult.NoPanic
             PanicPhase.LOCAL_PENDING -> return PostRecoveryResult.LocalPhaseStillPending
-            PanicPhase.COMPLETE ->
+            PanicPhase.COMPLETE,
+            PanicPhase.LEGACY_COMPLETE_UNVERIFIED ->
                 return PostRecoveryResult.Progress(
-                    PostRecoveryReport(PanicPhase.COMPLETE, null, null, null)
+                    report(state, null, null, null)
                 )
             PanicPhase.POST_PENDING -> Unit
         }
 
         var purgeResult: PanicEffectResult? = null
         var revokeResult: PanicEffectResult? = null
-        var remoteResult: PanicEffectResult? = null
+        var remoteResult: RemoteDeleteAttempt? = null
 
         if (!state.purgeComplete) {
             purgeResult = attemptEffect(10_000L) { postEffects.purgePrivateStaging() }
@@ -138,21 +162,48 @@ class PanicRecoveryCoordinator(
             }
         }
 
-        if (!state.remoteDeleteComplete) {
-            remoteResult = attemptEffect(10_000L) { postEffects.deleteRemoteVault() }
-            if (remoteResult == PanicEffectResult.COMPLETED) {
-                state = checkpointPostTask(state, PostTask.REMOTE_DELETE)
-                    ?: return PostRecoveryResult.StorageUnavailable(PanicStoreFailure.COMMIT_FAILED)
+        when (state.remoteDeleteCheckpoint) {
+            RemoteDeleteCheckpoint.PENDING,
+            RemoteDeleteCheckpoint.TOMBSTONED_PENDING -> {
+                val intent = checkNotNull(state.remoteDeleteIntent)
+                remoteResult = attemptRemoteDelete(10_000L) {
+                    postEffects.deleteRemoteVault(intent)
+                }
+                val nextCheckpoint = when (remoteResult) {
+                    RemoteDeleteAttempt.Complete -> RemoteDeleteCheckpoint.COMPLETE
+                    RemoteDeleteAttempt.TombstonedPending ->
+                        RemoteDeleteCheckpoint.TOMBSTONED_PENDING
+                    RemoteDeleteAttempt.BlockedAuth -> RemoteDeleteCheckpoint.BLOCKED_AUTH
+                    is RemoteDeleteAttempt.RetryableFailure -> null
+                    null -> null
+                }
+                if (nextCheckpoint != null && nextCheckpoint != state.remoteDeleteCheckpoint) {
+                    state = checkpointRemoteDelete(state, nextCheckpoint)
+                        ?: return PostRecoveryResult.StorageUnavailable(
+                            PanicStoreFailure.COMMIT_FAILED
+                        )
+                }
             }
+
+            RemoteDeleteCheckpoint.NOT_CONFIGURED,
+            RemoteDeleteCheckpoint.BLOCKED_AUTH,
+            RemoteDeleteCheckpoint.COMPLETE,
+            RemoteDeleteCheckpoint.LEGACY_UNPROVEN,
+            null -> Unit
         }
 
-        if (state.purgeComplete && state.sessionRevocationComplete && state.remoteDeleteComplete) {
+        if (
+            state.purgeComplete &&
+                state.sessionRevocationComplete &&
+                state.remoteDeleteAllowsV2Completion()
+        ) {
             when (val complete = store.transaction { latest ->
-                if (latest.phase == PanicPhase.POST_PENDING &&
+                if (
+                    latest.phase == PanicPhase.POST_PENDING &&
                     latest.panicIdHex == state.panicIdHex &&
                     latest.purgeComplete &&
                     latest.sessionRevocationComplete &&
-                    latest.remoteDeleteComplete
+                    latest.remoteDeleteAllowsV2Completion()
                 ) {
                     PanicStateMutation.Replace(latest.copy(phase = PanicPhase.COMPLETE), true)
                 } else {
@@ -168,14 +219,22 @@ class PanicRecoveryCoordinator(
         }
 
         return PostRecoveryResult.Progress(
-            PostRecoveryReport(
-                phase = state.phase,
-                purge = purgeResult,
-                sessionRevocation = revokeResult,
-                remoteDelete = remoteResult
-            )
+            report(state, purgeResult, revokeResult, remoteResult)
         )
     }
+
+    private fun report(
+        state: PanicPersistentState,
+        purge: PanicEffectResult?,
+        revoke: PanicEffectResult?,
+        remote: RemoteDeleteAttempt?,
+    ) = PostRecoveryReport(
+        phase = state.phase,
+        purge = purge,
+        sessionRevocation = revoke,
+        remoteDeleteAttempt = remote,
+        remoteDeleteCheckpoint = state.remoteDeleteCheckpoint,
+    )
 
     // Cooperative timeouts do not interrupt blocking platform I/O; adapters must be bounded too.
     private suspend fun attemptEffect(
@@ -184,18 +243,37 @@ class PanicRecoveryCoordinator(
     ): PanicEffectResult =
         withTimeoutOrNull(timeoutMs) {
             try {
-                action()
+                val result = action()
+                currentCoroutineContext().ensureActive()
+                result
             } catch (cancelled: CancellationException) {
-                throw cancelled // Preserve caller cancellation; never call the next effect after it.
+                throw cancelled
             } catch (_: Exception) {
                 PanicEffectResult.RETRYABLE_FAILURE
             }
         } ?: PanicEffectResult.RETRYABLE_FAILURE
 
+    private suspend fun attemptRemoteDelete(
+        timeoutMs: Long,
+        action: suspend () -> RemoteDeleteAttempt,
+    ): RemoteDeleteAttempt =
+        withTimeoutOrNull(timeoutMs) {
+            try {
+                val result = action()
+                currentCoroutineContext().ensureActive()
+                result
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                RemoteDeleteAttempt.RetryableFailure(
+                    RemoteDeleteRetryReason.ADAPTER_UNAVAILABLE
+                )
+            }
+        } ?: RemoteDeleteAttempt.RetryableFailure(RemoteDeleteRetryReason.TIMEOUT)
+
     private enum class PostTask {
         PURGE,
-        REVOKE,
-        REMOTE_DELETE
+        REVOKE
     }
 
     private suspend fun checkpointPostTask(
@@ -203,7 +281,8 @@ class PanicRecoveryCoordinator(
         task: PostTask
     ): PanicPersistentState? =
         when (val checkpoint = store.transaction { latest ->
-            if (latest.phase != PanicPhase.POST_PENDING ||
+            if (
+                latest.phase != PanicPhase.POST_PENDING ||
                 latest.panicIdHex != expected.panicIdHex
             ) {
                 PanicStateMutation.Keep(false)
@@ -211,12 +290,35 @@ class PanicRecoveryCoordinator(
                 val next = when (task) {
                     PostTask.PURGE -> latest.copy(purgeComplete = true)
                     PostTask.REVOKE -> latest.copy(sessionRevocationComplete = true)
-                    PostTask.REMOTE_DELETE -> latest.copy(remoteDeleteComplete = true)
                 }
                 PanicStateMutation.Replace(next, true)
             }
         }) {
             is PanicTransactionResult.Unavailable -> null
             is PanicTransactionResult.Success -> checkpoint.state
+        }
+
+    private suspend fun checkpointRemoteDelete(
+        expected: PanicPersistentState,
+        nextCheckpoint: RemoteDeleteCheckpoint,
+    ): PanicPersistentState? =
+        when (val checkpoint = store.transaction { latest ->
+            if (
+                latest.phase != PanicPhase.POST_PENDING ||
+                latest.panicIdHex != expected.panicIdHex ||
+                latest.remoteDeleteIntent != expected.remoteDeleteIntent ||
+                latest.remoteDeleteCheckpoint != expected.remoteDeleteCheckpoint
+            ) {
+                PanicStateMutation.Keep(false)
+            } else {
+                PanicStateMutation.Replace(
+                    latest.copy(remoteDeleteCheckpoint = nextCheckpoint),
+                    true,
+                )
+            }
+        }) {
+            is PanicTransactionResult.Unavailable -> null
+            is PanicTransactionResult.Success ->
+                if (checkpoint.value) checkpoint.state else checkpoint.state
         }
 }

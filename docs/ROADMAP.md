@@ -1,7 +1,7 @@
 # Roadmap
 
 ## A — bootstrap
-- [x] dépôt privé
+- [x] dépôt créé
 - [x] règles repo-factory / safe install
 - [x] Kotlin/Compose
 - [x] SAF Signal
@@ -17,14 +17,14 @@
 - [ ] staging privé
 - [ ] crypto auditée
 - [ ] restauration locale
-- [ ] tests interruption/reprise
+- [ ] tests interruption/reprise sur appareil réel
 
 ## C — cloud zéro connaissance
-- [ ] stockage objet
-- [ ] upload idempotent
-- [ ] delete-only credential
-- [ ] restauration nouvel appareil
-- [ ] rotation clés
+- [ ] stockage objet de production
+- [ ] upload idempotent de production
+- [ ] delete-only credential réel
+- [ ] restauration nouvel appareil de bout en bout
+- [ ] rotation clés validée en production
 
 ## D — Telegram
 - [ ] build TDLib reproductible
@@ -34,7 +34,6 @@
 - [ ] médias
 - [ ] révocation session
 
-
 ## E — contact de confiance / remote panic
 - [ ] audit GPT-6 du modèle de déclenchement SMS (#2)
 - [x] mode armé désactivé par défaut
@@ -43,7 +42,7 @@
 - [ ] secret one-shot distinct par contact, rotation à chaque nouvel armement
 - [x] fenêtre commune + expiration/reboot/horloge fail-closed
 - [ ] tout déclenchement valide invalide immédiatement les secrets des 1 à 5 contacts
-- [ ] tests replay / multipart / doublon / concurrence entre contacts / reboot / horloge
+- [ ] tests replay / multipart / doublon / concurrence entre contacts / reboot / horloge sur Android réel
 - [ ] flavor/canal SMS séparé du build sans permission sensible (#8)
 
 ## F — publication
@@ -54,15 +53,30 @@
 - [ ] build reproductible
 - [ ] canal de distribution
 
-
 ## Revue du 21 septembre — distinction conception / activation
 - [x] revue de conformité Kotlin et correctifs de frontières de sécurité
-- [x] spécification crypto V1 et cycle de clés (#1), sans implémentation AEAD active
+- [x] spécification crypto V1 et cycle de clés (#1), sans activation production
 - [x] contrat serveur DELETE-only et modèle de concurrence (#2), sans backend actif
-- [x] 32 tests Python de spécification
-- [ ] leases d'accès + provisioning explicite du coffre
-- [ ] crash tests Android/Keystore réels et intégration Tink
-- [ ] tests d'autorisation du backend et purge réelle
+- [x] modèles et tests Python de spécification
+- [x] leases d'accès + drain avant destruction de clé
+- [x] provisioning explicite du coffre et journal de crash implémentés dans la pile de sécurité
+- [x] Tink 1.23.0 épinglé + tests JVM de la primitive streaming (non production)
+- [ ] crash tests Android/Keystore sur appareil réel et validation de production Tink
+- [x] backend DELETE de référence avec tests d'autorisation, tombstone, purge et restauration
+- [ ] backend de production + preuve d'effacement authentifiée
 
-Voir le relais GPT-5.6 du 21 septembre pour le lot suivant. Les cases de conception ne
-remplacent pas les portes d'activation des sections B/C/E.
+## Consolidation du 4 octobre 2026
+
+La tête de consolidation part de `a45fd3c8af37d360758b6131753d076067e46d21`, soit la pile de sécurité issue des PR #9 à #32.
+
+- [x] conserver `PRODUCTION_CRYPTO_READY=false`
+- [x] conserver `SMS_REMOTE_PANIC_READY=false`
+- [x] ajouter `reference-server/**` aux chemins surveillés par la CI
+- [x] exécuter les tests du serveur DELETE de référence dans le job `security-contracts`
+- [ ] obtenir une CI complète verte sur le SHA de consolidation
+- [ ] revue GPT-6 du cycle de clés, du provisioning et du DELETE réellement implémentés avant activation
+- [ ] tests physiques Android avant toute affirmation de sûreté de production
+
+Les cases de conception, les tests JVM et le serveur de référence ne remplacent pas les portes
+d'activation des sections B/C/E. `PRODUCTION_CRYPTO_READY` reste faux jusqu'à la revue de sécurité
+et aux validations sur appareil réel.

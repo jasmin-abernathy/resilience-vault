@@ -9,7 +9,7 @@ object RemotePanicCommand {
     private val lowerHex256 = Regex("^[0-9a-f]{64}$")
 
     data class Parsed(
-        val generationHex: String,
+        val commandGenerationHex: String,
         val secretHex: String
     ) {
         override fun toString(): String = "Parsed([redacted])"
@@ -20,10 +20,10 @@ object RemotePanicCommand {
     fun isLowerHex256(value: String?): Boolean =
         value != null && lowerHex256.matches(value)
 
-    fun build(generationHex: String, secretHex: String): String {
-        require(isLowerHex256(generationHex))
+    fun build(commandGenerationHex: String, secretHex: String): String {
+        require(isLowerHex256(commandGenerationHex))
         require(isLowerHex256(secretHex))
-        return "RV1 $generationHex $secretHex"
+        return "RV1 $commandGenerationHex $secretHex"
     }
 
     fun parseExact(body: String): Parsed? {
@@ -36,26 +36,26 @@ object RemotePanicCommand {
     }
 
     fun verifierHex(
-        generationHex: String,
+        commandGenerationHex: String,
         e164: String,
         secretHex: String
     ): String {
-        require(isLowerHex256(generationHex))
+        require(isLowerHex256(commandGenerationHex))
         require(isCanonicalE164(e164))
         require(isLowerHex256(secretHex))
-        val material = "RV1\u0000$generationHex\u0000$e164\u0000$secretHex"
+        val material = "RV1\u0000$commandGenerationHex\u0000$e164\u0000$secretHex"
             .toByteArray(StandardCharsets.US_ASCII)
         return MessageDigest.getInstance("SHA-256").digest(material).toHex()
     }
 
     fun verifierMatches(
         expectedVerifierHex: String,
-        generationHex: String,
+        commandGenerationHex: String,
         e164: String,
         secretHex: String
     ): Boolean {
         if (!isLowerHex256(expectedVerifierHex)) return false
-        val actual = verifierHex(generationHex, e164, secretHex)
+        val actual = verifierHex(commandGenerationHex, e164, secretHex)
         return MessageDigest.isEqual(expectedVerifierHex.hexToBytes(), actual.hexToBytes())
     }
 

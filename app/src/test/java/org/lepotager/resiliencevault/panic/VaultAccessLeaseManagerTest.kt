@@ -33,10 +33,7 @@ class VaultAccessLeaseManagerTest {
 
         val panicking = VaultAccessLeaseManager(
             InMemoryPanicStateStore(
-                PanicPersistentState(
-                    phase = PanicPhase.LOCAL_PENDING,
-                    panicIdHex = "d".repeat(64)
-                )
+                PanicPersistentState.localPendingWithoutRemoteProof("d".repeat(64))
             )
         )
         val panicResult = panicking.withLease(VaultAccessOperation.EXPORT) { "should-not-run" }

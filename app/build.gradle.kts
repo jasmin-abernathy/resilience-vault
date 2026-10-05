@@ -76,6 +76,7 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.01.00"))
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-compose:1.10.0")
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.datastore:datastore-preferences:1.2.1")
     implementation("androidx.documentfile:documentfile:1.1.0")
@@ -85,7 +86,20 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
 
+    // Pinned: the local KEK one-shot adapter relies on v1.23.0 invoking its Aead encrypt once
+    // during serializeEncryptedKeyset. Revalidate that invariant before changing this version.
+    // PRODUCTION_CRYPTO_READY remains false until physical-device validation is complete.
+    implementation("com.google.crypto.tink:tink-android:1.23.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+
+    // Stable AndroidX Test versions from the official January 2026 release line.
+    // CI compiles these tests but does not claim emulator/physical-device validation.
+    androidTestImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:core-ktx:1.7.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

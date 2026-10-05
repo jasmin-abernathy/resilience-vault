@@ -20,21 +20,21 @@ class PanicAdmissionTest {
         val service = service()
 
         for (count in listOf(0, 1, 5, 6)) {
-            val result = service.armRemote(request(contacts.take(count)))
+            val result = arm(service, request(contacts.take(count)))
             assertEquals(count in 1..5, result is RemoteArmResult.Armed)
         }
 
         for (hours in listOf(1L, 2L, 6L, 12L, 24L, 48L, 72L, 73L)) {
-            val result = service.armRemote(request(listOf(contacts[0]), hours * 3_600_000L))
+            val result = arm(service, request(listOf(contacts[0]), hours * 3_600_000L))
             assertEquals(hours in setOf(1L, 6L, 12L, 24L, 48L, 72L), result is RemoteArmResult.Armed)
         }
     }
 
     @Test
     fun generated_commands_are_distinct_and_secrets_are_not_persisted() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
-        val result = service.armRemote(request(contacts.take(5))) as RemoteArmResult.Armed
+        val result = arm(service, request(contacts.take(5))) as RemoteArmResult.Armed
 
         assertEquals(5, result.commands.map { it.command }.distinct().size)
         val state = (store.read() as PanicStoreReadResult.Ready).state
@@ -47,25 +47,25 @@ class PanicAdmissionTest {
 
     @Test
     fun valid_contact_consumes_entire_window_and_cross_contact_secret_fails() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
-        val armed = service.armRemote(request(contacts.take(5))) as RemoteArmResult.Armed
+        val armed = arm(service, request(contacts.take(5))) as RemoteArmResult.Armed
 
         val cross = armed.commands[1].command
-        val wrong = service.acceptSms(envelope(contacts[0], cross))
+        val wrong = sms(service, envelope(contacts[0], cross))
         assertEquals(
             AdmissionRejectionReason.INVALID_SECRET,
             (wrong as AdmissionResult.Rejected).reason
         )
 
-        val accepted = service.acceptSms(envelope(contacts[3], armed.commands[3].command))
+        val accepted = sms(service, envelope(contacts[3], armed.commands[3].command))
         assertTrue(accepted is AdmissionResult.Accepted)
 
         val state = (store.read() as PanicStoreReadResult.Ready).state
         assertNull(state.arm)
         assertEquals(PanicPhase.LOCAL_PENDING, state.phase)
 
-        val replay = service.acceptSms(envelope(contacts[3], armed.commands[3].command))
+        val replay = sms(service, envelope(contacts[3], armed.commands[3].command))
         assertEquals(
             AdmissionRejectionReason.PANIC_ACTIVE,
             (replay as AdmissionResult.Rejected).reason
@@ -76,10 +76,10 @@ class PanicAdmissionTest {
     fun exact_expiry_boot_and_clock_drift_fail_closed() = runTest {
         suspend fun attempt(clock: PanicClockSnapshot): AdmissionResult {
             observation = PanicAdmissionObservation(now, true)
-            val store = InMemoryPanicStateStore()
+            val store = knownNoCloudStore()
             val service = service(store)
-            val armed = service.armRemote(request(listOf(contacts[0]))) as RemoteArmResult.Armed
-            return service.acceptSms(envelope(contacts[0], armed.commands.single().command, clock))
+            val armed = arm(service, request(listOf(contacts[0]))) as RemoteArmResult.Armed
+            return sms(service, envelope(contacts[0], armed.commands.single().command, clock))
         }
 
         val almost = now.copy(
@@ -112,11 +112,11 @@ class PanicAdmissionTest {
 
     @Test
     fun revoked_permission_disarms_and_untrusted_envelope_does_not_trigger() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
-        val armed = service.armRemote(request(listOf(contacts[0]))) as RemoteArmResult.Armed
+        val armed = arm(service, request(listOf(contacts[0]))) as RemoteArmResult.Armed
 
-        val untrusted = service.acceptSms(
+        val untrusted = sms(service, 
             envelope(contacts[0], armed.commands.single().command).copy(trustedSystemDelivery = false)
         )
         assertEquals(
@@ -125,7 +125,7 @@ class PanicAdmissionTest {
         )
 
         observation = observation.copy(smsChannelReady = false)
-        val revoked = service.acceptSms(
+        val revoked = sms(service, 
             ValidatedSmsEnvelope(contacts[0], armed.commands.single().command, true, true)
         )
         assertEquals(
@@ -138,9 +138,9 @@ class PanicAdmissionTest {
 
     @Test
     fun remove_contact_is_immediate_and_last_contact_disarms() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
-        service.armRemote(request(contacts.take(2)))
+        arm(service, request(contacts.take(2)))
 
         val removed = service.removeTrustedContact(contacts[0])
         assertTrue((removed as PanicTransactionResult.Success).value)
@@ -153,25 +153,43 @@ class PanicAdmissionTest {
 
     @Test
     fun local_panic_uses_same_persistent_intention_and_invalidates_remote_window() = runTest {
+        val store = knownNoCloudStore()
+        val service = service(store)
+        arm(service, request(contacts.take(5)))
+
+        assertTrue(service.acceptLocalVerified(AdmissionAuthoritySnapshot.notConfigured()) is AdmissionResult.Accepted)
+        val state = (store.read() as PanicStoreReadResult.Ready).state
+        assertEquals(PanicPhase.LOCAL_PENDING, state.phase)
+        assertNull(state.arm)
+        assertFalse(arm(service, request(listOf(contacts[0]))) is RemoteArmResult.Armed)
+    }
+
+    @Test
+    fun unknown_remote_configuration_blocks_sms_arming_but_not_local_emergency() = runTest {
         val store = InMemoryPanicStateStore()
         val service = service(store)
-        service.armRemote(request(contacts.take(5)))
+
+        val armResult = service.armRemote(request(listOf(contacts[0])))
+        assertEquals(
+            ArmRejectionReason.REMOTE_DELETE_PROOF_REQUIRED,
+            (armResult as RemoteArmResult.Rejected).reason,
+        )
 
         assertTrue(service.acceptLocal() is AdmissionResult.Accepted)
         val state = (store.read() as PanicStoreReadResult.Ready).state
         assertEquals(PanicPhase.LOCAL_PENDING, state.phase)
-        assertNull(state.arm)
-        assertFalse(service.armRemote(request(listOf(contacts[0]))) is RemoteArmResult.Armed)
+        assertEquals(RemoteDeleteCheckpoint.LEGACY_UNPROVEN, state.remoteDeleteCheckpoint)
+        assertTrue(state.legacyRemoteUnproven)
     }
 
     @Test
     fun commit_failure_never_reports_acceptance() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
-        val armed = service.armRemote(request(listOf(contacts[0]))) as RemoteArmResult.Armed
+        val armed = arm(service, request(listOf(contacts[0]))) as RemoteArmResult.Armed
 
         store.failNextCommit = true
-        val result = service.acceptSms(envelope(contacts[0], armed.commands.single().command))
+        val result = sms(service, envelope(contacts[0], armed.commands.single().command))
         assertEquals(
             PanicStoreFailure.COMMIT_FAILED,
             (result as AdmissionResult.StorageUnavailable).failure
@@ -181,12 +199,12 @@ class PanicAdmissionTest {
 
     @Test
     fun simultaneous_valid_contacts_have_exactly_one_winner() = runTest {
-        val store = InMemoryPanicStateStore()
+        val store = knownNoCloudStore()
         val service = service(store)
-        val armed = service.armRemote(request(contacts.take(2))) as RemoteArmResult.Armed
+        val armed = arm(service, request(contacts.take(2))) as RemoteArmResult.Armed
 
-        val first = async { service.acceptSms(envelope(contacts[0], armed.commands[0].command)) }
-        val second = async { service.acceptSms(envelope(contacts[1], armed.commands[1].command)) }
+        val first = async { sms(service, envelope(contacts[0], armed.commands[0].command)) }
+        val second = async { sms(service, envelope(contacts[1], armed.commands[1].command)) }
         val results = listOf(first.await(), second.await())
 
         assertEquals(1, results.count { it is AdmissionResult.Accepted })
@@ -196,20 +214,39 @@ class PanicAdmissionTest {
     @Test
     fun rearming_rotates_generation_and_all_commands() = runTest {
         val service = service()
-        val first = service.armRemote(request(contacts.take(2))) as RemoteArmResult.Armed
-        val second = service.armRemote(request(contacts.take(2))) as RemoteArmResult.Armed
+        val first = arm(service, request(contacts.take(2))) as RemoteArmResult.Armed
+        val second = arm(service, request(contacts.take(2))) as RemoteArmResult.Armed
 
         assertNotEquals(first.commands[0].command, second.commands[0].command)
         assertNotEquals(first.commands[1].command, second.commands[1].command)
     }
 
+    private suspend fun arm(
+        service: PanicAdmissionService,
+        request: RemoteArmRequest,
+    ): RemoteArmResult =
+        service.armRemoteVerified(request, AdmissionAuthoritySnapshot.notConfigured())
+
+    private suspend fun sms(
+        service: PanicAdmissionService,
+        envelope: ValidatedSmsEnvelope,
+    ): AdmissionResult =
+        service.acceptSmsVerified(envelope, AdmissionAuthoritySnapshot.notConfigured())
+
     private fun service(
-        store: InMemoryPanicStateStore = InMemoryPanicStateStore()
+        store: InMemoryPanicStateStore = knownNoCloudStore()
     ): PanicAdmissionService =
         PanicAdmissionService(
             store = store,
             environment = PanicAdmissionEnvironment { observation },
             tokenGenerator = RemotePanicTokenGenerator(SecureRandom())
+        )
+
+    private fun knownNoCloudStore(): InMemoryPanicStateStore =
+        InMemoryPanicStateStore(
+            PanicPersistentState.initial().copy(
+                remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED
+            )
         )
 
     private fun request(

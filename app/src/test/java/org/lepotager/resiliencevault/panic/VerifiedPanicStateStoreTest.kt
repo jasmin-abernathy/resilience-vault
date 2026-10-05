@@ -49,6 +49,66 @@ class VerifiedPanicStateStoreTest {
     }
 
     @Test
+    fun explicit_first_install_initializes_only_missing_state_and_never_resets_corruption() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+
+        val missing = FakeStateFile().apply { bytes = null }
+        val fresh = VerifiedPanicStateStore(missing, dispatcher)
+        assertTrue(fresh.read() is PanicStoreReadResult.Unavailable)
+        assertTrue(fresh.initializeFresh() is PanicInitializationResult.Created)
+        assertEquals(PanicPersistentState.initial(), (fresh.read() as PanicStoreReadResult.Ready).state)
+        assertTrue(fresh.initializeFresh() is PanicInitializationResult.AlreadyInitialized)
+        assertEquals(1, missing.writes)
+
+        val corrupt = FakeStateFile().apply { bytes = byteArrayOf(1, 2, 3) }
+        val broken = VerifiedPanicStateStore(corrupt, dispatcher)
+        assertTrue(broken.initializeFresh() is PanicInitializationResult.Unavailable)
+        assertEquals(0, corrupt.writes)
+
+        val pending = PanicPersistentState.localPendingWithoutRemoteProof("e".repeat(64))
+        val existing = FakeStateFile().apply { bytes = PanicStateCodec.encode(pending) }
+        val existingStore = VerifiedPanicStateStore(existing, dispatcher)
+        assertTrue(existingStore.initializeFresh() is PanicInitializationResult.AlreadyInitialized)
+        assertEquals(pending, (existingStore.read() as PanicStoreReadResult.Ready).state)
+        assertEquals(0, existing.writes)
+    }
+
+    @Test
+    fun failed_first_install_commit_latches_closed() = runTest {
+        val file = FakeStateFile().apply { bytes = null; ignoreWrites = true }
+        val store = VerifiedPanicStateStore(file, StandardTestDispatcher(testScheduler))
+        assertTrue(store.initializeFresh() is PanicInitializationResult.Unavailable)
+        file.ignoreWrites = false
+        assertTrue(store.initializeFresh() is PanicInitializationResult.Unavailable)
+        assertTrue(store.read() is PanicStoreReadResult.Unavailable)
+    }
+
+    @Test
+    fun reading_v1_never_rewrites_it_and_a_later_locked_mutation_commits_v2() = runTest {
+        val legacy = LegacyPanicStateV1Fixture.encode("IDLE")
+        val file = FakeStateFile().apply {
+            bytes = legacy
+            writes = 0
+        }
+        val store = VerifiedPanicStateStore(file, StandardTestDispatcher(testScheduler))
+
+        val read = store.read() as PanicStoreReadResult.Ready
+        assertEquals(RemoteDeleteConfiguration.UNKNOWN, read.state.remoteDeleteConfiguration)
+        assertEquals(0, file.writes)
+        assertEquals(1, LegacyPanicStateV1Fixture.version(checkNotNull(file.bytes)))
+
+        val result = store.transaction { current ->
+            PanicStateMutation.Replace(
+                current.copy(remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED),
+                true,
+            )
+        }
+        assertTrue(result is PanicTransactionResult.Success)
+        assertEquals(1, file.writes)
+        assertEquals(2, LegacyPanicStateV1Fixture.version(checkNotNull(file.bytes)))
+    }
+
+    @Test
     fun real_threads_sharing_store_have_one_committed_winner() = runTest {
         val file = FakeStateFile()
         val store = VerifiedPanicStateStore(file)
@@ -60,9 +120,14 @@ class VerifiedPanicStateStoreTest {
 
     @Test
     fun legal_states_cannot_be_used_to_reset_or_skip_panic() = runTest {
-        val pending = PanicPersistentState(phase = PanicPhase.LOCAL_PENDING, panicIdHex = "c".repeat(64))
+        val pending = PanicPersistentState(
+            phase = PanicPhase.LOCAL_PENDING,
+            panicIdHex = "c".repeat(64),
+            remoteDeleteConfiguration = RemoteDeleteConfiguration.NOT_CONFIGURED,
+            remoteDeleteCheckpoint = RemoteDeleteCheckpoint.NOT_CONFIGURED,
+        )
         val post = pending.copy(phase = PanicPhase.POST_PENDING, purgeComplete = true)
-        val complete = post.copy(phase = PanicPhase.COMPLETE, sessionRevocationComplete = true, remoteDeleteComplete = true)
+        val complete = post.copy(phase = PanicPhase.COMPLETE, sessionRevocationComplete = true)
         val invalidTransitions = listOf(
             pending to PanicPersistentState.initial(),
             PanicPersistentState.initial() to post,
