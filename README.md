@@ -1,6 +1,6 @@
 # Resilience Vault
 
-Coffre Android privé en phase de bootstrap, destiné à devenir open source après stabilisation du modèle de sécurité.
+Coffre Android en phase de bootstrap sécurité. Le dépôt est désormais public pour rendre le travail inspectable, mais le projet n’est pas encore présenté comme une version de production.
 
 ## Objectif
 
@@ -78,4 +78,4 @@ Pré-requis : JDK 17 et Android SDK 36.
 
 ## Licence
 
-Le dépôt reste privé pendant le bootstrap. La licence de publication doit être choisie avant ouverture du dépôt.
+Le dépôt est public, mais aucune licence de redistribution n’a encore été choisie. Le code est donc visible et auditable ; il ne doit pas être présenté comme « open source » au sens d’une licence libre tant que cette licence n’est pas ajoutée.
