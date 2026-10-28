@@ -80,3 +80,17 @@ La tête de consolidation part de `a45fd3c8af37d360758b6131753d076067e46d21`, so
 Les cases de conception, les tests JVM et le serveur de référence ne remplacent pas les portes
 d'activation des sections B/C/E. `PRODUCTION_CRYPTO_READY` reste faux jusqu'à la revue de sécurité
 et aux validations sur appareil réel.
+
+## G — SimpleX Chat (préparation du 28 octobre 2026)
+
+- [x] import de référence d'un export ZIP choisi explicitement via SAF, en lecture seule
+- [x] vérification minimale du format ZIP, statut d'accès et retrait de l'autorisation
+- [x] modèle pur des préconditions d'un effacement coopératif, avec tests
+- [ ] preuve cryptographique de sauvegarde distante et restauration effective sur second appareil
+- [ ] copie récupérable **distincte** du coffre supprimé par le panic de RV
+- [ ] API coopérative auditée côté SimpleX pour effacer base et médias
+- [ ] autorisation expresse temporaire + authentification/anti-rejeu + tests Android réels
+- [ ] activation production seulement après revue de sécurité
+
+Aucun ZIP sélectionné ne devient automatiquement sauvegardé : l'upload, le panic SimpleX
+et la désinstallation ne sont pas implémentés.

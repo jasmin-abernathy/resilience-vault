@@ -9,6 +9,7 @@ Resilience Vault doit permettre de sauvegarder régulièrement des données choi
 Sources prévues :
 
 - **Signal** : dossier de sauvegarde locale choisi via le Storage Access Framework ;
+- **SimpleX Chat** : sélection en lecture seule d'un export ZIP effectué manuellement dans SimpleX (pas d'effacement automatisé) ;
 - **Telegram** : connecteur officiel **TDLib** isolé du reste de l’application ;
 - **dossiers génériques** : dossiers explicitement choisis, sans permission de stockage globale.
 
@@ -19,6 +20,7 @@ Cette base contient notamment :
 - projet Android Kotlin/Compose ;
 - sélection persistante de dossiers SAF ;
 - connecteurs Signal et dossier générique ;
+- connecteur SimpleX d'export manuel via SAF (validation superficielle, pas de sauvegarde distante) ;
 - port Telegram TDLib/JNI ;
 - orchestration testable du panic ;
 - primitives Tink/Keystore et cycle de clés encore bloqués par les portes de production ;
@@ -32,7 +34,8 @@ Le backend de production, la preuve d'effacement authentifiée, la récupératio
 ## Architecture
 
 ```text
-Signal backup folder ─┐
+SimpleX export ZIP ────┐
+Signal backup folder ─┤
 Generic folder ───────┼──> Connectors ──> Crypto port ──> Remote vault
 Telegram / TDLib ─────┘                         │
                                                └──> Panic coordinator
@@ -43,6 +46,7 @@ Documentation :
 - `docs/ARCHITECTURE.md`
 - `docs/SECURITY-BOUNDARIES.md`
 - `docs/TELEGRAM-TDLIB.md`
+- `docs/SIMPLEX-INTEGRATION.md`
 - `docs/GPT6-HANDOFF.md`
 - `docs/ROADMAP.md`
 
@@ -91,3 +95,7 @@ python3 -m unittest discover -s tests -v
 ## Licence
 
 Le dépôt est public mais ne contient pas encore de fichier `LICENSE`. Une licence open source doit être choisie avant toute publication stable ; tant qu'elle est absente, le code ne doit pas être présenté comme une release open source réutilisable.
+
+## SimpleX — portée actuelle
+
+Le connecteur peut mémoriser une archive ZIP exportée manuellement via SAF et vérifier sa lisibilité et sa signature ZIP ; **aucun transfert, restauration ou effacement SimpleX n'est activé**. La destruction future de la base privée de SimpleX dépendra d'une API coopérative intégrée côté SimpleX. Voir `docs/SIMPLEX-INTEGRATION.md` pour les risques et la séparation du coffre de récupération.
