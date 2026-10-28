@@ -35,3 +35,15 @@ Un secret SMS n'est pas considéré comme confidentiel après transmission : cha
 Le numéro expéditeur ne constitue pas à lui seul une preuve suffisante. L'audit doit considérer l'usurpation/rejeu et la combinaison numéro + secret.
 
 Aucune permission SMS ne doit apparaître dans le build principal tant que le canal de distribution et la politique correspondante ne sont pas validés.
+
+## SimpleX officiel
+
+Le nouveau connecteur ne lit que le ZIP donné explicitement par Android SAF. Il ne contrôle
+pas SimpleX, ne lit pas sa base interne et ne supprime ni sa base ni ses médias.
+Une archive ZIP peut contenir des données sensibles non couvertes par la destruction RV,
+même si la base SimpleX elle-même est chiffrée. La sélection d'un ZIP ne prouve pas
+son origine, son intégrité, son chiffrement ou sa restauration.
+
+Aucun effacement transversal à l'application SimpleX n'est autorisé sans intégration
+coopérative et auditée côté SimpleX. Une copie conservée pour restauration doit rester
+hors du périmètre DELETE du panic RV, avec consentement explicite à cette rétention.

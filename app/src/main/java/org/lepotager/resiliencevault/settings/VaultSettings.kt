@@ -14,6 +14,7 @@ private val Context.vaultDataStore by preferencesDataStore(name = "vault_setting
 
 data class VaultSettingsSnapshot(
     val signalTreeUri: Uri? = null,
+    val simplexExportUri: Uri? = null,
     val genericTreeUri: Uri? = null,
     val telegramEnabled: Boolean = false
 )
@@ -21,6 +22,7 @@ data class VaultSettingsSnapshot(
 class VaultSettings(private val context: Context) {
     private object Keys {
         val signalTree = stringPreferencesKey("signal_tree_uri")
+        val simplexExport = stringPreferencesKey("simplex_export_uri")
         val genericTree = stringPreferencesKey("generic_tree_uri")
         val telegramEnabled = booleanPreferencesKey("telegram_enabled")
     }
@@ -28,9 +30,14 @@ class VaultSettings(private val context: Context) {
     val snapshot: Flow<VaultSettingsSnapshot> = context.vaultDataStore.data.map { prefs ->
         VaultSettingsSnapshot(
             signalTreeUri = prefs.uriOrNull(Keys.signalTree),
+            simplexExportUri = prefs.uriOrNull(Keys.simplexExport),
             genericTreeUri = prefs.uriOrNull(Keys.genericTree),
             telegramEnabled = prefs[Keys.telegramEnabled] ?: false
         )
+    }
+
+    suspend fun setSimplexExportUri(uri: Uri?) = context.vaultDataStore.edit {
+        it.putOrRemove(Keys.simplexExport, uri)
     }
 
     suspend fun setSignalTree(uri: Uri?) = context.vaultDataStore.edit {

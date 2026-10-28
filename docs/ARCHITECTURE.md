@@ -50,3 +50,15 @@ Désactivation du launcher reportée hors MVP.
 La décision SMS du 20 septembre demeure la base ; les documents ci-dessus précisent les
 correctifs et les limites restant à valider. Une interface, un test JVM ou un modèle Python ne
 prouve pas la destruction de clés ni la durabilité réelle sur Android.
+
+## SimpleX Chat (connecteur préparatoire)
+
+`simplex-export` accepte **un seul document ZIP exporté manuellement**, en lecture seule via
+`ACTION_OPEN_DOCUMENT`. Il conserve l'URI SAF et teste seulement la lisibilité ainsi que l'en-tête ZIP :
+aucun accès aux données privées SimpleX, aucune extraction, aucun upload ni effacement. Ne jamais
+assimiler `ConnectorHealth.READY` à une sauvegarde réellement chiffrée/restaurable.
+
+Un futur panic visant **SimpleX** est distinct de l'effacement du coffre RV :
+il exige un adaptateur coopératif audité dans SimpleX, une autorisation explicite,
+et une copie de récupération survivant au `deleteEntireVault` du panic RV.
+Voir `docs/SIMPLEX-INTEGRATION.md`.

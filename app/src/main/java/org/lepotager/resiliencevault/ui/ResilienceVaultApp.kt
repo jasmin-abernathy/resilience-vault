@@ -33,6 +33,8 @@ import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
 import org.lepotager.resiliencevault.BuildConfig
+import org.lepotager.resiliencevault.connectors.ConnectorStatus
+import org.lepotager.resiliencevault.connectors.simplex.SimplexExportConnector
 import org.lepotager.resiliencevault.crypto.AndroidFirstInstallSecurityCeremony
 import org.lepotager.resiliencevault.crypto.AndroidInstallationSecurityMutationCoordinator
 import org.lepotager.resiliencevault.crypto.FirstInstallSecurityStatus
@@ -49,6 +51,7 @@ import org.lepotager.resiliencevault.panic.PlatformPhoneNumberNormalizer
 import org.lepotager.resiliencevault.panic.RemotePanicPolicy
 import org.lepotager.resiliencevault.panic.RemotePanicWindow
 import org.lepotager.resiliencevault.settings.VaultSettings
+import org.lepotager.resiliencevault.storage.PersistedDocumentAccess
 import org.lepotager.resiliencevault.storage.PersistedTreeAccess
 
 @Composable
@@ -68,6 +71,37 @@ fun ResilienceVaultApp(settings: VaultSettings) {
         if (uri != null) {
             PersistedTreeAccess.persistReadAccess(context.contentResolver, uri)
             scope.launch { settings.setGenericTree(uri) }
+        }
+    }
+
+    val simplexConnector = remember(context, settings) {
+        SimplexExportConnector(context.applicationContext, settings)
+    }
+    var simplexStatus by remember { mutableStateOf<ConnectorStatus?>(null) }
+    var simplexSelectionError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(snapshot?.simplexExportUri) {
+        simplexStatus = simplexConnector.status()
+    }
+    val simplexPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    PersistedDocumentAccess.persistReadAccess(context.contentResolver, uri)
+                    val old = snapshot?.simplexExportUri
+                    settings.setSimplexExportUri(uri)
+                    simplexSelectionError = null
+                    if (old != null && old != uri) {
+                        try {
+                            PersistedDocumentAccess.releaseReadAccess(context.contentResolver, old)
+                        } catch (_: SecurityException) {
+                            // The previous grant may already have been revoked.
+                        }
+                    }
+                } catch (_: SecurityException) {
+                    simplexSelectionError = "Accès refusé : sélectionner à nouveau l’archive."
+                }
+            }
         }
     }
 
@@ -93,6 +127,47 @@ fun ResilienceVaultApp(settings: VaultSettings) {
                 if (snapshot?.genericTreeUri != null) "Dossier sélectionné."
                 else "Aucun dossier sélectionné."
             ) { genericPicker.launch(snapshot?.genericTreeUri) }
+
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("SimpleX Chat — export manuel", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Dans SimpleX : Réglages > Phrase secrète et export de la base. " +
+                            "Arrête le chat, définis et conserve ta phrase secrète, puis exporte le ZIP."
+                    )
+                    Text(simplexStatus?.detail ?: "Vérification du fichier sélectionné…")
+                    Text(
+                        "La sauvegarde distante et la suppression automatique de SimpleX " +
+                            "ne sont pas disponibles dans ce build.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = { simplexPicker.launch(arrayOf("*/*")) }) {
+                        Text("Choisir un export SimpleX (.zip)")
+                    }
+                    if (snapshot?.simplexExportUri != null) {
+                        OutlinedButton(onClick = {
+                            scope.launch {
+                                val old = snapshot?.simplexExportUri
+                                settings.setSimplexExportUri(null)
+                                if (old != null) {
+                                    try {
+                                        PersistedDocumentAccess.releaseReadAccess(context.contentResolver, old)
+                                    } catch (_: SecurityException) {
+                                        // The grant has already been revoked.
+                                    }
+                                }
+                            }
+                        }) { Text("Oublier l’export sélectionné (sans effacer le fichier)") }
+                    }
+                    simplexSelectionError?.let { Text(it) }
+                    Text(
+                        "En attendant une intégration coopérative, la suppression de la base " +
+                            "et des médias se fait dans les réglages de SimpleX.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
