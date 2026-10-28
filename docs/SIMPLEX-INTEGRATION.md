@@ -44,7 +44,7 @@ La sauvegarde doit :
 
 RV n'a pas accès aux données privées de `chat.simplex.app` et ne peut pas la désinstaller silencieusement sur Android ordinaire. Aucun AccessibilityService, root, ADB, gestionnaire d'appareil, permission globale de stockage ou receiver exporté n'est autorisé pour contourner le sandbox.
 
-L'application SimpleX sait supprimer sa propre base et ses médias par son interface. Une automatisation exige une **coopération explicite et auditée de SimpleX** (API interne dédiée, action authentifiée/consentie, anti-rejeu, accusé de résultat, interopérabilité vérifiée). **Un message reçu via SimpleX, un SMS ou un lien ne constitue jamais à lui seul une autorisation d'effacement**.
+L'application SimpleX sait supprimer sa propre base et ses médias par son interface. RV propose aussi un bouton ouvrant la fiche Android de \`chat.simplex.app\` pour permettre **à l'utilisateur** d'effacer les données ou de désinstaller l'application via les confirmations système : aucune action n'est automatique. Une automatisation exige une **coopération explicite et auditée de SimpleX** (API interne dédiée, action authentifiée/consentie, anti-rejeu, accusé de résultat, interopérabilité vérifiée). **Un message reçu via SimpleX, un SMS ou un lien ne constitue jamais à lui seul une autorisation d'effacement**.
 
 `SimplexErasePreflight` exprime des conditions nécessaires à une future revue, mais il n'existe aucun moteur de suppression dans RV : aucun de ses booléens ne déclenche une action. Il faudra distinguer effacement logique, suppression des médias, révocation des sessions, désinstallation Android avec UI, confirmation partielle, crash/réexécution et limites des copies ailleurs.
 
