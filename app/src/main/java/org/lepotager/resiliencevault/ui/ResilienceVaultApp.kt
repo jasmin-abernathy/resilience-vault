@@ -166,6 +166,20 @@ fun ResilienceVaultApp(settings: VaultSettings) {
                             "et des médias se fait dans les réglages de SimpleX.",
                         style = MaterialTheme.typography.bodySmall
                     )
+                    OutlinedButton(onClick = {
+                        val appDetails = android.content.Intent(
+                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            android.net.Uri.parse("package:chat.simplex.app")
+                        )
+                        try {
+                            context.startActivity(appDetails)
+                            simplexSelectionError = null
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            simplexSelectionError = "Paramètres Android de SimpleX indisponibles."
+                        }
+                    }) {
+                        Text("Gérer les données / désinstaller SimpleX dans Android")
+                    }
                 }
             }
 
